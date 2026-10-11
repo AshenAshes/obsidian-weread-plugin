@@ -51,6 +51,10 @@ class ApiV2Manager {
 		}
 	}
 
+	async searchCommunityBooks(keyword: string) {
+		return this.callAgent<{ results: { books?: { bookInfo?: import('./models').CommunityBook }[] }[] }>('/store/search', { keyword, scope: 10 });
+	}
+
 	async getBook(bookId: string) {
 		return this.callAgent('/book/info', { bookId });
 	}

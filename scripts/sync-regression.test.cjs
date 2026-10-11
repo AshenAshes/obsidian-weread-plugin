@@ -13,6 +13,8 @@ function harness() {
 	const requests = [];
 	const queue = [];
 	const obsidian = {
+		ItemView: class {},
+		Modal: class {},
 		Platform: { isDesktopApp: true },
 		Notice: class {
 			hide() {}
@@ -389,4 +391,117 @@ test('each managed section ends at the next heading and reviews end at EOF', () 
  assert.ok(!result.includes('old review'));
  assert.ok(result.endsWith('new review\n'));
  assert.equal(mergeManagedSections(result, fresh), result);
+});
+
+
+test('bookshelf first paint is local, refreshes coalesce and failed refresh retains cache', async () => {
+ const h = harness();
+ const Service = h.load('src/bookshelf.ts').default;
+ const store = h.load('src/settings.ts').settingsStore;
+ store.actions.setWereadApiKey('account-a');
+ let release;
+ let requests = 0;
+ let fail = false;
+ const gate = new Promise((resolve) => { release = resolve; });
+ const api = {
+  getShelf: async () => { requests++; if (fail) throw new Error('offline'); await gate; return { books: [{ bookId: 'remote', title: '远端书', finishReading: 1 }] }; },
+  getReadingNotebooks: async () => [],
+  getReadingProgress: async () => ({ book: { progress: 100 } })
+ };
+ let files = new Map([['local', { bookId: 'local', title: '本地书', file: { basename: '本地书' } }]]);
+ const service = new Service({ getNotebookFilesByBookId: async () => files }, api);
+ const initial = await service.getInitialBookshelfBooks();
+ assert.equal(initial.localOnly, true);
+ assert.equal(initial.books[0].title, '本地书');
+ assert.equal(requests, 0);
+ const first = service.getBookshelfBooks();
+ const second = service.getBookshelfBooks();
+ assert.equal(requests, 1);
+ release();
+ await Promise.all([first, second]);
+ files = new Map();
+ const cached = await service.getInitialBookshelfBooks();
+ assert.equal(cached.localOnly, false);
+ assert.equal(cached.books.length, 1);
+ assert.equal(cached.books[0].title, '远端书');
+ fail = true;
+ await assert.rejects(service.getBookshelfBooks());
+ assert.equal((await service.getInitialBookshelfBooks()).books[0].title, '远端书');
+ store.actions.setWereadApiKey('account-b');
+ assert.equal((await service.getInitialBookshelfBooks()).localOnly, true);
+ assert.equal((await service.getInitialBookshelfBooks()).books.length, 0);
+});
+
+test('bookshelf renders before remote resolves and ignores responses after closing', async () => {
+ const h = harness();
+ h.load('src/settings.ts').settingsStore.actions.setWereadApiKey('test-only');
+ const View = h.load('src/components/wereadBookshelf.ts').WereadBookshelfView;
+ let release;
+ const remote = new Promise((resolve) => { release = resolve; });
+ const view = Object.create(View.prototype);
+ const local = [{ bookId: 'local' }];
+ let painted;
+ view.loadGeneration = 0;
+ view.bookshelfService = { getInitialBookshelfBooks: async () => ({ books: local, localOnly: true }), getBookshelfBooks: () => remote };
+ view.renderBooks = () => { painted = view.shelfBooks; };
+ view.refreshStatusEl = { setText() {} };
+ view.contentEl = { empty() {} };
+ const loading = view.loadBookshelf();
+ await new Promise((resolve) => setImmediate(resolve));
+ assert.equal(painted, local);
+ await view.onClose();
+ release([{ bookId: 'remote' }]);
+ await loading;
+ assert.equal(painted, local);
+});
+
+
+test('community mapping routes only public content and unlink restores original book', async () => {
+ const h = harness();
+ const store = h.load('src/settings.ts').settingsStore;
+ const View = h.load('src/components/wereadBookDetailView.ts').WereadBookDetailView;
+ const view = Object.create(View.prototype);
+ view.bookId = 'CB_imported'; view.requestGeneration = 0;
+ view.renderLoadingState = () => {};
+ const calls = [];
+ view.apiRouter = {};
+ for (const method of ['getBook', 'getProgress', 'getNotebookHighlights', 'getNotebookReviews', 'getBestBookmarks', 'getPublicReviews']) {
+  view.apiRouter[method] = async (id) => { calls.push([method, id]); return { items: [], chapters: [], reviews: [] }; };
+ }
+ store.actions.setCommunityBook('CB_imported', { bookId: '123', title: '书城版', author: '作者' });
+ await view.loadAllData();
+ assert.deepEqual(calls.slice(0, 4).map((call) => call[1]), Array(4).fill('CB_imported'));
+ assert.deepEqual(calls.slice(4).map((call) => call[1]), ['123', '123']);
+ assert.equal(view.communitySource.bookId, '123');
+ assert.ok(view.buildDeepLink(47, '10-20', view.communitySource.bookId).includes('bookId=123'));
+ assert.ok(view.buildDeepLink(3, '10-20').includes('bookId=CB_imported'));
+ store.actions.setCommunityBook('CB_imported');
+ calls.length = 0;
+ await view.loadAllData();
+ assert.equal(view.communitySource, undefined);
+ assert.ok(calls.every((call) => call[1] === 'CB_imported'));
+});
+
+test('community search accepts scope 17 response groups and deduplicates book IDs', async () => {
+ const h = harness();
+ h.load('src/settings.ts').settingsStore.actions.setWereadApiKey('test-only');
+ h.queue.push({ results: [{ scope: 17, books: [{ bookInfo: { bookId: '123', title: '书城版', author: '作者' } }, { bookInfo: { bookId: '123', title: '书城版', author: '作者' } }] }] });
+ const Router = h.load('src/api-router.ts').default;
+ const books = await new Router().searchCommunityBooks('书城版');
+ assert.equal(books.length, 1);
+ assert.equal(books[0].bookId, '123');
+ assert.equal(h.requests[0].scope, 10);
+ assert.equal(h.requests[0].keyword, '书城版');
+});
+
+
+test('title filtering handles both parentheses, nested groups and whitelist', () => {
+ const { formatBookTitle } = harness().load('src/utils/sanitizeTitle.ts');
+ const enabled = { removeParens: true };
+ assert.equal(formatBookTitle('死灵之书(珍藏版)', enabled), '死灵之书');
+ assert.equal(formatBookTitle('书名（上册）正文(附录)', enabled), '书名正文');
+ assert.equal(formatBookTitle('书名（修订(第二版)）', enabled), '书名');
+ assert.equal(formatBookTitle('书名(未闭合', enabled), '书名(未闭合');
+ assert.equal(formatBookTitle('书名(版本)', { removeParens: false }), '书名(版本)');
+ assert.equal(formatBookTitle('书名(版本)', { ...enabled, removeParensWhitelist: '书名' }), '书名(版本)');
 });

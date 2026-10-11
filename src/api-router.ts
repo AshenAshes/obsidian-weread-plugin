@@ -27,6 +27,15 @@ class ApiRouter {
 		return Boolean(settings.wereadApiKey);
 	}
 
+	async searchCommunityBooks(keyword: string): Promise<import('./models').CommunityBook[]> {
+		if (!this.useV2()) throw new Error('搜索社区版本需要配置 API Key');
+		const response = await this.v2Manager.searchCommunityBooks(keyword.trim());
+		if (!Array.isArray(response?.results)) throw new Error('搜索失败，请稍后重试');
+		const books = response.results.flatMap((group) => group.books ?? []).map((item) => item.bookInfo)
+			.filter((book) => book?.bookId && book?.title);
+		return Array.from(new Map(books.map((book) => [String(book.bookId), { ...book, bookId: String(book.bookId) }])).values());
+	}
+
 	async getShelf() {
 		if (!this.useV2()) throw new Error('书架在读与已读同步需要 API Key，请先在设置中配置');
 		return this.v2Manager.getShelf();

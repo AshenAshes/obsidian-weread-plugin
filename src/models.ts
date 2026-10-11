@@ -630,3 +630,13 @@ export type PopularHighlightCache = {
 		title: string;
 	}[];
 };
+
+export interface CommunityBook {
+ cover?: string;
+ bookId: string;
+ title: string;
+ author: string;
+ translator?: string;
+ publisher?: string;
+ isbn?: string;
+}

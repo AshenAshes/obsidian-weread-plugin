@@ -5,7 +5,7 @@ import notebookTemolate from './themes/notebookTemplate.njk';
 import wereadOfficialTemplate from './themes/wereadOfficialTemplate.njk';
 import separatedTemplate from './themes/separatedTemplate.njk';
 import WereadPlugin from '../main';
-import type { SyncLogEntry, Theme } from './models';
+import type { SyncLogEntry, Theme, CommunityBook } from './models';
 
 export type SyncMode = 'blacklist' | 'whitelist';
 export type SyncScope = 'notebooks' | 'reading';
@@ -53,6 +53,7 @@ export const BUILT_IN_THEMES: Theme[] = [
 ];
 
 export interface WereadPluginSettings {
+	communityBooks: Record<string, CommunityBook>;
 	loginMethod: string;
 	cookies: Cookie[];
 	noteLocation: string;
@@ -114,6 +115,7 @@ export interface WereadPluginSettings {
 }
 
 const DEFAULT_SETTINGS: WereadPluginSettings = {
+	communityBooks: {},
 	loginMethod: 'scan',
 	cookies: [],
 	noteLocation: '/',
@@ -785,6 +787,13 @@ const createSettingsStore = () => {
 		subscribe: store.subscribe,
 		initialise,
 		actions: {
+			setCommunityBook: (sourceId: string, book?: CommunityBook) => {
+				store.update((state) => {
+					const mappings = { ...state.communityBooks };
+					if (book) mappings[sourceId] = { ...book }; else delete mappings[sourceId];
+					return { ...state, communityBooks: mappings };
+				});
+			},
 			setLoginMethod,
 			setNoteLocationFolder,
 			setCookies,

@@ -62,6 +62,11 @@ export class WereadSettingsTab extends PluginSettingTab {
 
 	display() {
 		const { containerEl } = this;
+        // Preserve scroll offsets across the synchronous settings rebuild.
+        const scrollPositions: { element: HTMLElement; top: number }[] = [];
+        for (let element: HTMLElement | null = containerEl; element; element = element.parentElement) {
+            scrollPositions.push({ element, top: element.scrollTop });
+        }
 		containerEl.empty();
 		this.syncSettingsHeadingEl = null;
 		containerEl.createEl('h2', { text: '设置微信读书插件' });
@@ -94,6 +99,7 @@ export class WereadSettingsTab extends PluginSettingTab {
 		if (Platform.isDesktopApp) {
 			this.showDebugHelp();
 		}
+        for (const { element, top } of scrollPositions) element.scrollTop = top;
 	}
 
 	private showMobileLogin() {

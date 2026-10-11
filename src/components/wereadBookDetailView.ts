@@ -1,3 +1,6 @@
+import { formatBookTitle } from '../utils/sanitizeTitle';
+import { CommunityBookModal } from './communityBookModal';
+import type { CommunityBook } from '../models';
 import { ItemView, WorkspaceLeaf, setIcon, Notice, TFile } from 'obsidian';
 import { get } from 'svelte/store';
 import ApiRouter from '../api-router';
@@ -47,7 +50,8 @@ export class WereadBookDetailView extends ItemView {
 
 	private loading = false;
 	private error: string | null = null;
-	private requestBookId = '';
+	private requestGeneration = 0;
+	private communitySource?: CommunityBook;
 
 	private headerEl!: HTMLElement;
 	private tabBarEl!: HTMLElement;
@@ -64,7 +68,7 @@ export class WereadBookDetailView extends ItemView {
 	}
 
 	getDisplayText(): string {
-		return this.bookTitle || '书籍详情';
+		return formatBookTitle(this.detail?.title || this.bookTitle, get(settingsStore)) || '书籍详情';
 	}
 
 	getIcon(): string {
@@ -85,7 +89,7 @@ export class WereadBookDetailView extends ItemView {
 		}
 
 		if (titleEl) {
-			titleEl.textContent = this.bookTitle;
+			titleEl.textContent = this.getDisplayText();
 		}
 	}
 
@@ -99,6 +103,7 @@ export class WereadBookDetailView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
+		this.requestGeneration++;
 		this.contentEl.empty();
 	}
 
@@ -150,7 +155,10 @@ export class WereadBookDetailView extends ItemView {
 	private async loadAllData(): Promise<void> {
 		this.loading = true;
 		this.error = null;
-		this.requestBookId = this.bookId;
+		const generation = ++this.requestGeneration;
+		const sourceId = this.bookId;
+		const communitySource = get(settingsStore).communityBooks?.[sourceId];
+		const communityId = communitySource?.bookId ?? sourceId;
 		this.renderLoadingState();
 
 		const [detail, progress, highlights, reviews, popular, publicReviews] =
@@ -159,11 +167,12 @@ export class WereadBookDetailView extends ItemView {
 				this.apiRouter.getProgress(this.bookId),
 				this.apiRouter.getNotebookHighlights(this.bookId),
 				this.apiRouter.getNotebookReviews(this.bookId),
-				this.apiRouter.getBestBookmarks(this.bookId),
-				this.apiRouter.getPublicReviews(this.bookId)
+				this.apiRouter.getBestBookmarks(communityId),
+				this.apiRouter.getPublicReviews(communityId)
 			]);
 
-		if (this.requestBookId !== this.bookId) return;
+		if (generation !== this.requestGeneration || sourceId !== this.bookId) return;
+		this.communitySource = communitySource;
 
 		this.detail = detail.status === 'fulfilled' ? detail.value : undefined;
 		this.progress = progress.status === 'fulfilled' ? progress.value : undefined;
@@ -299,7 +308,7 @@ export class WereadBookDetailView extends ItemView {
 				cls: 'weread-book-detail-cover'
 			});
 			coverEl.src = coverSrc;
-			coverEl.alt = this.detail?.title || this.bookTitle;
+			coverEl.alt = this.getDisplayText();
 		}
 
 		// 右侧描述区：标题、作者、评分、进度、统计、简介
@@ -310,7 +319,7 @@ export class WereadBookDetailView extends ItemView {
 
 		const titleRow = infoMain.createDiv({ cls: 'weread-book-detail-title-row' });
 		const titleEl = titleRow.createEl('h2', {
-			text: this.detail?.title || this.bookTitle,
+			text: this.getDisplayText(),
 			cls: 'weread-book-detail-title'
 		});
 		if (hasLocal) {
@@ -433,6 +442,13 @@ export class WereadBookDetailView extends ItemView {
 			});
 		}
 
+        const associate = bar.createEl('button', { text: get(settingsStore).communityBooks?.[this.bookId] ? '更改社区版本' : '关联社区版本' });
+        associate.onclick = () => {
+            const sourceId = this.bookId;
+            new CommunityBookModal(this.app, this.apiRouter, sourceId, this.bookTitle, () => {
+                if (this.bookId === sourceId) void this.loadAllData().then(() => this.render());
+            }).open();
+        };
 		// 弹性空间 + 阅读按钮 + 刷新按钮
 		bar.createDiv({ cls: 'weread-book-detail-tabbar-spacer' });
 		const readBtn = bar.createEl('button', { cls: 'weread-book-detail-tab-action' });
@@ -465,6 +481,13 @@ export class WereadBookDetailView extends ItemView {
 
 	private renderContent(): void {
 		this.contentChildEl.empty();
+        if (this.communitySource && (this.currentTab === 'popular' || this.currentTab === 'reviews')) {
+            const source = this.communitySource;
+            this.contentChildEl.createDiv({ cls: 'setting-item-description', text: `社区内容来源：${formatBookTitle(source.title, get(settingsStore))} · ${source.author} · ${source.publisher || '出版社未知'}（${source.bookId}）。个人笔记仍属于原书。` });
+        }
+        if ((this.currentTab === 'popular' && !this.popularResp) || (this.currentTab === 'reviews' && !this.publicReviewResp)) {
+            this.contentChildEl.createDiv({ cls: 'setting-item-description', text: '社区内容获取失败或当前版本不支持，可更改关联版本后重试。' });
+        }
 		switch (this.currentTab) {
 			case 'highlights':
 				this.renderHighlightsTab();
@@ -757,7 +780,7 @@ export class WereadBookDetailView extends ItemView {
 
 				// 操作按钮（inline 在 meta 行右侧）
 				const actions = meta.createDiv({ cls: 'weread-book-detail-hl-actions' });
-				this.createDeepLinkButton(actions, this.buildDeepLink(h.chapterUid, h.range));
+				this.createDeepLinkButton(actions, this.buildDeepLink(h.chapterUid, h.range, this.communitySource?.bookId ?? this.bookId));
 				this.createCopyButton(actions, h.markText);
 			}
 		}
@@ -876,9 +899,9 @@ export class WereadBookDetailView extends ItemView {
 
 	// ── 辅助方法 ────────────────────────────────────────────────
 
-	private buildDeepLink(chapterUid: number, range: string): string {
+	private buildDeepLink(chapterUid: number, range: string, bookId = this.bookId): string {
 		const [start, end] = range.split('-');
-		return `weread://bestbookmark?bookId=${this.bookId}&chapterUid=${chapterUid}&rangeStart=${start}&rangeEnd=${end || start}`;
+		return `weread://bestbookmark?bookId=${bookId}&chapterUid=${chapterUid}&rangeStart=${start}&rangeEnd=${end || start}`;
 	}
 
 	private renderTextWithBreaks(container: HTMLElement, text: string, cls: string): void {

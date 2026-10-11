@@ -12,5 +12,11 @@ export function formatBookTitle(
 ): string {
  const whitelist = (settings.removeParensWhitelist || '').split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
  if (!settings.removeParens || whitelist.some((keyword) => title.includes(keyword))) return title;
- return title.replace(/（.*）/g, '');
+ let result = title;
+ let previous: string;
+ do {
+  previous = result;
+  result = result.replace(/（[^（）()]*）|\([^（）()]*\)/g, '');
+ } while (result !== previous);
+ return result.trim();
 }
