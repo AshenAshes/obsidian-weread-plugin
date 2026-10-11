@@ -15,6 +15,7 @@ lastReadDate: {{ metaData.lastReadDate }}
 > - 出版社： {{ metaData.publisher }}
 > - PC地址：{{ metaData.pcUrl }}
 
+
 # 高亮划线
 {% for chapter in chapterHighlights %}
 {% if chapter.level == 1 %}
@@ -25,34 +26,24 @@ lastReadDate: {{ metaData.lastReadDate }}
 #### {{ chapter.chapterTitle }}
 {% endif %}
 {% for highlight in chapter.highlights %}
-{% set rangeParts = highlight.range | split("-") %}
-{% set deeplink = "weread://bestbookmark?bookId=" + metaData.bookId + "&chapterUid=" + highlight.chapterUid + "&rangeStart=" + rangeParts[0] + "&rangeEnd=" + rangeParts[1] %}
 {% if syncPopularHighlightsToggle and highlight.isPopular %}
-> 📌🔥 [{{ highlight.markText | trim }}](<{{ deeplink }}>)  
-> 🔥 {{ highlight.popularCount }} 人共读 ^{{ highlight.bookmarkId }}
+> 📌🔥 {{ highlight.markText | trim }}
+> 🔥 {{ highlight.popularCount }} 人共读
 
 {% else %}
-> 📌 [{{ highlight.markText | trim }}](<{{ deeplink }}>)   ^{{ highlight.bookmarkId }}
-
-{% endif %}
-{% endfor %}
-{% endfor %}
-
-# 笔记汇总
-{% for chapter in chapterHighlights %}
-{% for highlight in chapter.highlights %}
-{% if highlight.reviewContent %}
-## {{ chapter.chapterTitle }} 的想法
-{{ highlight.reviewContent }}
 > 📌 {{ highlight.markText | trim }}
 
 {% endif %}
 {% endfor %}
 {% endfor %}
 
+
+# 读书笔记
+
+# 本书评论
 {% if bookReview.bookReviews %}
 {% for bookReview in bookReview.bookReviews %}
-# 书评
+## 书评
 
 {{ bookReview.mdContent }}
 {{ bookReview.createTime }}

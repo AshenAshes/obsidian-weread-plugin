@@ -344,6 +344,8 @@ export type Notebook = {
 };
 
 export type Metadata = {
+	finishReading?: number;
+	progressResponse?: BookProgressResponse;
 	bookId: string;
 	author: string;
 	title: string;

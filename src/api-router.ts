@@ -27,6 +27,19 @@ class ApiRouter {
 		return Boolean(settings.wereadApiKey);
 	}
 
+	async getShelf() {
+		if (!this.useV2()) throw new Error('书架在读与已读同步需要 API Key，请先在设置中配置');
+		return this.v2Manager.getShelf();
+	}
+
+	async getReadingNotebooks() {
+		return (await this.v2Manager.getNotebooks()).books;
+	}
+
+	async getReadingProgress(bookId: string) {
+		return this.v2Manager.getReadingProgress(bookId);
+	}
+
 	/**
 	 * 判断是否为公众号类型（bookType === 3）
 	 * 公众号类型必须使用 V1 接口（依赖 Cookie）
@@ -70,20 +83,8 @@ class ApiRouter {
 	}
 
 	async getNotebookReviews(bookId: string, isArticle = false): Promise<BookReviewResponse | undefined> {
-		// 公众号类型强制使用 V1 接口（依赖 Cookie）
-		if (isArticle) {
-			console.log('[weread plugin] 公众号类型，强制使用 V1 接口获取笔记');
-			return this.v1Manager.getNotebookReviews(bookId);
-		}
-
-		if (this.useV2()) {
-			try {
-				const result = await this.v2Manager.getNotebookReviews(bookId);
-				if (result) return result as BookReviewResponse;
-			} catch (e) {
-				console.warn('V2 getNotebookReviews 调用失败，回退到 V1', e);
-			}
-		}
+		// Do not hide incomplete gateway pagination behind a different data source.
+		if (this.useV2() && !isArticle) return this.v2Manager.getNotebookReviews(bookId);
 		return this.v1Manager.getNotebookReviews(bookId);
 	}
 

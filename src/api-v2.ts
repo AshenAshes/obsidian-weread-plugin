@@ -1,6 +1,17 @@
 import { requestUrl, RequestUrlParam } from 'obsidian';
 import { settingsStore } from './settings';
 import { get } from 'svelte/store';
+import type { BookProgressResponse, BookReviewResponse } from './models';
+
+export type ShelfBook = {
+	bookId: string;
+	title: string;
+	author?: string;
+	cover?: string;
+	finishReading: number;
+	readUpdateTime?: number;
+	type?: number;
+};
 
 class ApiV2Manager {
 	private readonly gatewayUrl: string = 'https://i.weread.qq.com/api/agent/gateway';
@@ -22,7 +33,7 @@ class ApiV2Manager {
 			},
 			body: JSON.stringify({
 				api_name: apiName,
-				skill_version: '1.0.3',
+				skill_version: '1.0.5',
 				...params
 			})
 		};
@@ -52,6 +63,24 @@ class ApiV2Manager {
 		return this.callAgent('/book/getprogress', { bookId });
 	}
 
+	async getShelf(): Promise<{ books: ShelfBook[] }> {
+		const result = await this.callAgent<{ books: ShelfBook[] }>('/shelf/sync');
+		if (!Array.isArray(result?.books)) throw new Error('获取完整书架失败，请检查 API Key 后重试');
+		if (result.books.some((book) => !book.bookId || !book.title ||
+			(book.finishReading !== 0 && book.finishReading !== 1))) {
+			throw new Error('书架数据不完整，已停止同步');
+		}
+		return { books: Array.from(new Map(result.books.map((book) => [String(book.bookId), book])).values()) };
+	}
+
+	async getReadingProgress(bookId: string): Promise<BookProgressResponse> {
+		const result = await this.callAgent<BookProgressResponse>('/book/getprogress', { bookId });
+		if (!result?.book || !Number.isFinite(result.book.progress)) {
+			throw new Error(`读取书籍 ${bookId} 的阅读状态失败，已停止同步`);
+		}
+		return result;
+	}
+
 	async getReadingStats(mode: string, baseTime?: number) {
 		const params: Record<string, unknown> = { mode };
 		if (baseTime !== undefined) params.baseTime = baseTime;
@@ -79,10 +108,22 @@ class ApiV2Manager {
 	}
 
 	async getNotebookReviews(bookId: string) {
-		return this.callAgent('/review/list/mine', {
-			bookid: bookId,
-			synckey: 0
-		});
+		const reviews: BookReviewResponse['reviews'] = [];
+		const cursors = new Set<number>([0]);
+		let synckey = 0;
+		while (true) {
+			const page = await this.callAgent<BookReviewResponse>('/review/list/mine', {
+				bookid: bookId, synckey, count: 100
+			});
+			if (!Array.isArray(page?.reviews)) throw new Error('书评获取失败，已保留本地内容');
+			reviews.push(...page.reviews);
+			if (page.hasMore !== 1) return { ...page, reviews, hasMore: 0 };
+			synckey = page.synckey;
+			if (!Number.isFinite(synckey) || cursors.has(synckey)) {
+				throw new Error('书评分页不完整，已保留本地内容');
+			}
+			cursors.add(synckey);
+		}
 	}
 
 	async getBestBookmarks(bookId: string, chapterUid = 0) {
@@ -154,7 +195,7 @@ class ApiV2Manager {
 	}
 
 	/**
-	 * 获取笔记本列表（所有有笔记/在书架的书）
+	 * 获取笔记本列表（所有有笔记的书，不等于完整书架）
 	 * 格式与 V1 /api/user/notebook 兼容
 	 * 自动处理分页，每页 300 本
 	 */
@@ -162,6 +203,7 @@ class ApiV2Manager {
 		const PAGE_SIZE = 300;
 		let allBooks: any[] = [];
 		let lastSort: number | undefined;
+		const cursors = new Set<number>();
 
 		do {
 			const params: Record<string, unknown> = { count: PAGE_SIZE };
@@ -172,7 +214,7 @@ class ApiV2Manager {
 				hasMore: number;
 			}>('/user/notebooks', params);
 
-			if (!page?.books) break;
+			if (!Array.isArray(page?.books)) throw new Error('笔记本列表获取失败，不能使用不完整列表同步');
 
 			allBooks = allBooks.concat(page.books);
 
@@ -181,9 +223,13 @@ class ApiV2Manager {
 			// 取本页最后一条的 sort 作为下一页的游标
 			const lastBook = page.books[page.books.length - 1];
 			lastSort = lastBook?.sort;
+			if (!Number.isFinite(lastSort) || cursors.has(lastSort)) {
+				throw new Error('笔记本分页游标异常，已停止同步');
+			}
+			cursors.add(lastSort);
 		} while (lastSort !== undefined);
 
-		return { books: allBooks };
+		return { books: Array.from(new Map(allBooks.map((book) => [String(book.bookId ?? book.book?.bookId), book])).values()) };
 	}
 }
 

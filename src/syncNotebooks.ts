@@ -13,7 +13,6 @@ import {
 } from './models';
 import {
 	parseHighlights,
-	parseMetadata,
 	parseChapterHighlightReview,
 	parseChapterReviews,
 	parseDailyNoteReferences,
@@ -25,6 +24,7 @@ import { settingsStore } from './settings';
 import { get } from 'svelte/store';
 import { Notice, Vault } from 'obsidian';
 import { createSyncFilterContext, evaluateMetadataSyncFilter } from './syncFilter';
+import { getBookCatalog } from './bookCatalog';
 export default class SyncNotebooks {
 	private fileManager: FileManager;
 	private apiManager: ApiRouter;
@@ -40,8 +40,8 @@ export default class SyncNotebooks {
 		const metaDataArr: Metadata[] = await this.getALlMetadata();
 		const currentBookMeta = metaDataArr.find((metaData) => metaData.bookId === noteFile.bookId);
 		noteFile.new = true;
-		currentBookMeta.file = noteFile;
 		if (currentBookMeta) {
+			currentBookMeta.file = noteFile;
 			const notebook = await this.convertToNotebook(currentBookMeta);
 			await this.saveNotebook(notebook);
 			new Notice(`当前笔记 《${currentBookMeta.title}》 同步成功!`);
@@ -76,7 +76,7 @@ export default class SyncNotebooks {
 		signal?: { cancelled: boolean }
 	): Promise<number> {
 		const syncStartTime = new Date().getTime();
-		const metaDataArr = await this.getALlMetadata();
+		const metaDataArr = await getBookCatalog(this.apiManager, signal);
 		const filterMetaArr = await this.filterNoteMetas(force, metaDataArr);
 		let syncedNotebooks = 0;
 		let failedNotebooks = 0;
@@ -109,14 +109,15 @@ export default class SyncNotebooks {
 				const meta = filterMetaArr[i];
 				const next = filterMetaArr[i + 1];
 				// 提前显示下一本书名，让用户感知当前在处理哪本
-				updateProgress(syncedNotebooks, meta.title);
+				updateProgress(i, meta.title);
 				try {
 					const notebook = await this.convertToNotebook(meta);
+					if (signal?.cancelled) break;
 					const savedFilePath = await this.saveNotebook(notebook);
-					syncedNotebooks++;
 
 					// Track synced note for the log
 					if (savedFilePath) {
+						syncedNotebooks++;
 						syncedNotes.push({
 							bookId: meta.bookId,
 							title: meta.title,
@@ -128,7 +129,7 @@ export default class SyncNotebooks {
 					lastError = e instanceof Error ? e.message : String(e);
 					console.error(`[weread plugin] 同步书籍 ${meta.title} 失败`, e);
 				}
-				updateProgress(syncedNotebooks, next?.title);
+				updateProgress(i + 1, next?.title);
 			}
 		} catch (e) {
 			progressNotice.hide();
@@ -136,7 +137,14 @@ export default class SyncNotebooks {
 		}
 
 		const wasCancelled = signal?.cancelled ?? false;
-		this.saveToJounal(journalDate, metaDataArr);
+		if (!wasCancelled) {
+			try {
+				await this.saveToJounal(journalDate, metaDataArr);
+			} catch (e) {
+				lastError = `Daily Note 更新失败：${e instanceof Error ? e.message : String(e)}`;
+				new Notice(lastError);
+			}
+		}
 		const syncEndTime = new Date().getTime();
 		const syncTimeInMilliseconds = syncEndTime - syncStartTime;
 		const syncTimeInSeconds = syncTimeInMilliseconds / 1000;
@@ -147,10 +155,10 @@ export default class SyncNotebooks {
 			timestamp: syncStartTime,
 			totalBooks: metaDataArr.length,
 			syncedBooks: syncedNotebooks,
-			skippedBooks: filterMetaArr.length - syncedNotebooks,
+			skippedBooks: metaDataArr.length - syncedNotebooks,
 			duration: syncTimeInSeconds,
 			notes: syncedNotes,
-			success: !lastError,
+			success: !lastError && !wasCancelled,
 			errorMessage: lastError
 		};
 		settingsStore.actions.addSyncLog(syncLog);
@@ -162,8 +170,9 @@ export default class SyncNotebooks {
 		barFill.style.width = '100%';
 		if (wasCancelled) barFill.style.background = 'var(--text-muted)';
 		const summaryParts = [
-			`📚 书架共 ${metaDataArr.length} 本 · 本次处理 ${total} 本`,
+			`📚 候选书籍 ${metaDataArr.length} 本 · 本次处理 ${total} 本`,
 			failedNotebooks > 0 ? `⚠️ ${failedNotebooks} 本同步失败` : '',
+			failedNotebooks > 0 ? lastError : '',
 			`⏱ 耗时 ${syncTimeInSeconds.toFixed(1)} 秒`
 		].filter(Boolean);
 		titleEl.setText(summaryParts.join(' · '));
@@ -173,11 +182,12 @@ export default class SyncNotebooks {
 
 	public async syncNotesToJounal(journalDate: string) {
 		const metaDataArr = await this.getALlMetadata();
-		this.saveToJounal(journalDate, metaDataArr);
+		await this.saveToJounal(journalDate, metaDataArr);
 	}
 
 	private async convertToNotebook(metaData: Metadata): Promise<Notebook> {
 		const bookDetail = await this.apiManager.getBook(metaData.bookId);
+		if (!bookDetail) throw new Error(`获取《${metaData.title}》详情失败，已保留本地文件`);
 		if (bookDetail) {
 			metaData.category = bookDetail.category;
 			metaData.publisher = bookDetail.publisher;
@@ -186,7 +196,8 @@ export default class SyncNotebooks {
 			metaData.totalWords = bookDetail.totalWords;
 			metaData.rating = `${bookDetail.newRating / 10}%`;
 		}
-		const progress: BookProgressResponse = await this.apiManager.getProgress(metaData.bookId);
+		const progress: BookProgressResponse = metaData.progressResponse ?? await this.apiManager.getProgress(metaData.bookId);
+		if (!progress?.book) throw new Error(`获取《${metaData.title}》阅读进度失败，已保留本地文件`);
 		if (progress && progress.book) {
 			metaData.readInfo = {
 				readingProgress: progress.book.progress,
@@ -199,9 +210,10 @@ export default class SyncNotebooks {
 		const highlightResp = await this.apiManager.getNotebookHighlights(metaData.bookId, metaData.bookType === 3);
 		const reviewResp = await this.apiManager.getNotebookReviews(metaData.bookId, metaData.bookType === 3);
 		const chapterResp = await this.apiManager.getChapters(metaData.bookId, metaData.bookType === 3);
+		if (reviewResp?.hasMore === 1) throw new Error(`《${metaData.title}》书评列表不完整，已保留本地文件`);
 
 		// 处理 V1 API 返回 undefined 的情况（如 Cookie 无效）
-		if (!highlightResp || !chapterResp) {
+		if (!Array.isArray(highlightResp?.updated) || !Array.isArray(reviewResp?.reviews) || !chapterResp) {
 			console.warn(`[weread plugin] 获取书籍数据失败: ${metaData.title}, bookType=${metaData.bookType}`);
 			if (metaData.bookType === 3) {
 				throw new Error(`公众号"${metaData.title}"数据获取失败，请检查 Cookie 是否有效（需扫码登录）`);
@@ -419,12 +431,11 @@ export default class SyncNotebooks {
 	}
 
 	private async getALlMetadata() {
-		const notebookResp = await this.apiManager.getNotebooksWithRetry();
-		const metaDataArr = notebookResp.map((noteBook) => parseMetadata(noteBook));
-		return metaDataArr;
+		return getBookCatalog(this.apiManager);
 	}
 
 	private async saveToJounal(journalDate: string, metaDataArr: Metadata[]) {
+		if (!get(settingsStore).dailyNotesToggle) return;
 		const metaDataArrInDate = this.filterMetasByCurrentSettings(metaDataArr).filter(
 			(meta) => meta.lastReadDate === journalDate
 		);
@@ -444,7 +455,7 @@ export default class SyncNotebooks {
 				' size:',
 				dailyNoteRefereneces.length
 			);
-			this.fileManager.saveDailyNotes(dailyNotePath, dailyNoteRefereneces);
+			await this.fileManager.saveDailyNotes(dailyNotePath, dailyNoteRefereneces);
 		}
 	}
 
@@ -468,26 +479,15 @@ export default class SyncNotebooks {
 	): Promise<AnnotationFile> {
 		const localFile = localFiles.find((file) => file.bookId === notebookMeta.bookId) || null;
 		if (localFile) {
-			if (
-				localFile.noteCount == notebookMeta.noteCount &&
-				localFile.reviewCount == notebookMeta.reviewCount &&
-				!force
-			) {
-				localFile.new = false;
-			} else {
-				localFile.new = true;
-			}
+			// Counts alone cannot detect reading progress or edits to existing notes.
+			// Refresh data each run; the writer avoids touching identical output.
+			localFile.new = true;
 			return localFile;
 		}
 		return null;
 	}
 
 	private async saveNotebook(notebook: Notebook): Promise<string | null> {
-		try {
-			return await this.fileManager.saveNotebook(notebook);
-		} catch (e) {
-			console.log('[weread plugin] sync note book error', notebook.metaData.title, e);
-			return null;
-		}
+		return this.fileManager.saveNotebook(notebook);
 	}
 }

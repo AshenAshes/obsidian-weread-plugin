@@ -12,7 +12,7 @@ import {
 	TextComponent
 } from 'obsidian';
 import type { Metadata } from './models';
-import { parseMetadata } from './parser/parseResponse';
+import { getBookCatalog } from './bookCatalog';
 import { settingsStore } from './settings';
 import { get } from 'svelte/store';
 import WereadLoginModel from './components/wereadLoginModel';
@@ -199,7 +199,7 @@ export class WereadSettingsTab extends PluginSettingTab {
 	private bookOpenModeSetting(): void {
 		new Setting(this.containerEl)
 			.setName('书架阅读入口')
-			.setDesc('点击书架"阅读此书"按钮及详情页阅读链接时，跳转到网页版还是 App')
+			.setDesc('点击详情页阅读链接时，跳转到网页版还是 App')
 			.addDropdown((dropdown) => {
 				return dropdown
 					.addOption('web', '网页版')
@@ -302,6 +302,18 @@ export class WereadSettingsTab extends PluginSettingTab {
 
 	private syncModeSettings(): void {
 		this.syncSettingsHeadingEl = this.containerEl.createEl('h3', { text: '同步设置' });
+		new Setting(this.containerEl)
+			.setName('同步范围')
+			.setDesc('书架模式需要 API Key，仅同步明确读完或进度大于 0 的书，不受最低划线数限制。两种模式都保留本地读书笔记，模板需包含四模块或同步标记。')
+			.addDropdown((dropdown) => dropdown
+				.addOption('reading', '书架中在读与已读的书')
+				.addOption('notebooks', '原笔记本列表')
+				.setValue(get(settingsStore).syncScope)
+				.onChange((value: 'reading' | 'notebooks') => {
+					settingsStore.actions.setSyncScope(value);
+					this.selectableBooksCache = [];
+					this.display();
+				}));
 
 		new Setting(this.containerEl)
 			.setName('同步模式')
@@ -320,7 +332,7 @@ export class WereadSettingsTab extends PluginSettingTab {
 		const syncMode = get(settingsStore).syncMode;
 		if (syncMode === 'blacklist') {
 			this.saveArticleToggle();
-			this.noteCountLimit();
+			if (get(settingsStore).syncScope !== 'reading') this.noteCountLimit();
 		}
 		this.syncPopularHighlightsToggle();
 		this.renderSyncModeBookSelection(syncMode);
@@ -362,7 +374,7 @@ export class WereadSettingsTab extends PluginSettingTab {
 								{
 									hideArticles: !get(settingsStore).saveArticleToggle,
 									noteCountLimit:
-										syncMode === 'blacklist'
+										syncMode === 'blacklist' && get(settingsStore).syncScope !== 'reading'
 											? get(settingsStore).noteCountLimit
 											: UNLIMITED_NOTE_COUNT
 								},
@@ -1099,8 +1111,7 @@ export class WereadSettingsTab extends PluginSettingTab {
 			throw new Error('请先登录微信读书或配置 API Key 后再加载书籍列表');
 		}
 		const apiRouter2 = new ApiRouter();
-		const notebookResp = await apiRouter2.getNotebooksWithRetry();
-		this.selectableBooksCache = notebookResp.map((noteBook) => parseMetadata(noteBook));
+		this.selectableBooksCache = await getBookCatalog(apiRouter2);
 		return this.selectableBooksCache;
 	}
 

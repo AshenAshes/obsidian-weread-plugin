@@ -1,97 +1,62 @@
-import { Notice, parseYaml, stringifyYaml, TFile, App } from 'obsidian';
+import { parseYaml, stringifyYaml } from 'obsidian';
 import type { Notebook } from '../models';
 import { formatTimeDuration, formatTimestampToDate } from './dateUtil';
 import { settingsStore } from '../settings';
 import { get } from 'svelte/store';
-
-type FrontMatterContent = {
-	doc_type: string;
-	bookId: string;
-	title?: string;
-	noteCount: number;
-	reviewCount: number;
-	author?: string;
-	cover?: string;
-	readingStatus?: string;
-	progress?: string;
-	readingTime?: string;
-	totalReadDay?: number;
-	readingDate?: string;
-	finishedDate?: string;
-};
+import { splitFrontmatter } from './managedSections';
 
 export const frontMatterDocType = 'weread-highlights-reviews';
 
-enum ReadingStatus {
-	'未标记' = 1,
-	'在读' = 2,
-	'读过' = 3,
-	'读完' = 4
+function parseProperties(yaml?: string): Record<string, unknown> {
+	if (!yaml?.trim()) return {};
+	const parsed = parseYaml(yaml);
+	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+		throw new Error('YAML 属性必须是键值对象，已保留原文件');
+	}
+	return parsed;
 }
 
+/** Merge from the actual current text, never from the asynchronous metadata cache. */
 export const buildFrontMatter = (
 	markdownContent: string,
-	noteBook: Notebook,
-	existFile?: TFile,
-	app?: App
-) => {
-	const frontMatter: FrontMatterContent = {
+	notebook: Notebook,
+	existingContent?: string
+): string => {
+	const generated = splitFrontmatter(markdownContent);
+	const previous =
+		existingContent === undefined
+			? {}
+			: parseProperties(splitFrontmatter(existingContent).yaml);
+	const properties = { ...parseProperties(generated.yaml), ...previous };
+	const meta = notebook.metaData;
+	Object.assign(properties, {
 		doc_type: frontMatterDocType,
-		bookId: noteBook.metaData.bookId,
-		title: noteBook.metaData.title,
-		reviewCount: noteBook.metaData.reviewCount,
-		noteCount: noteBook.metaData.noteCount
-	};
-
-	const saveReadingInfoToggle = get(settingsStore).saveReadingInfoToggle;
-
-	if (saveReadingInfoToggle) {
-		(frontMatter.author = noteBook.metaData.author),
-			(frontMatter.cover = noteBook.metaData.cover);
-
-		const readInfo = noteBook.metaData.readInfo;
-		if (readInfo) {
-			// Use finishedDate to determine reading status since markedStatus is no longer available in new API
-			// If finishedDate exists and is valid (> 0), status is "读完", otherwise "在读"
-			if (readInfo.finishedDate && readInfo.finishedDate > 0) {
-				frontMatter.readingStatus = ReadingStatus['读完'].toString();
-			} else {
-				frontMatter.readingStatus = ReadingStatus['在读'].toString();
-			}
-			frontMatter.progress =
-				readInfo.readingProgress === undefined ? '-1' : readInfo.readingProgress + '%';
-			frontMatter.totalReadDay = readInfo.totalReadDay;
-			frontMatter.readingTime = formatTimeDuration(readInfo.readingTime);
-			frontMatter.readingDate = formatTimestampToDate(readInfo.readingBookDate);
-			if (readInfo.finishedDate) {
-				frontMatter.finishedDate = formatTimestampToDate(readInfo.finishedDate);
-			}
+		bookId: meta.bookId,
+		title: meta.title,
+		isbn: meta.isbn ?? '',
+		lastReadDate: meta.lastReadDate,
+		reviewCount: meta.reviewCount,
+		noteCount: meta.noteCount
+	});
+	if (get(settingsStore).saveReadingInfoToggle) {
+		properties.author = meta.author;
+		properties.cover = meta.cover;
+		const info = meta.readInfo;
+		if (info) {
+			const finished =
+				meta.finishReading === 1 ||
+				(meta.finishReading === undefined && info.finishedDate > 0);
+			properties.readingStatus = finished ? '4' : info.readingProgress > 0 ? '2' : '1';
+			properties.progress = `${info.readingProgress}%`;
+			properties.readingTime = formatTimeDuration(info.readingTime ?? 0);
+			for (const key of ['totalReadDay', 'readingDate', 'finishedDate'])
+				delete properties[key];
+			if (info.totalReadDay !== undefined) properties.totalReadDay = info.totalReadDay;
+			if (info.readingBookDate > 0)
+				properties.readingDate = formatTimestampToDate(info.readingBookDate);
+			if (finished && info.finishedDate > 0)
+				properties.finishedDate = formatTimestampToDate(info.finishedDate);
 		}
 	}
-	let existFrontMatter = Object();
-	if (existFile) {
-		const cache = app.metadataCache.getFileCache(existFile);
-		existFrontMatter = cache.frontmatter;
-		if (existFrontMatter === undefined) {
-			new Notice('weread front matter invalid');
-			throw Error('weread front matter invalid');
-		}
-		delete existFrontMatter['position'];
-	}
-
-	const idx = markdownContent.indexOf('---');
-	let templateFrontMatter = Object();
-	if (idx !== -1) {
-		const startInd = markdownContent.indexOf('---') + 4;
-		const endInd = markdownContent.substring(startInd).indexOf('---') - 1;
-		const templateYmlRaw = markdownContent.substring(startInd, startInd + endInd);
-		templateFrontMatter = parseYaml(templateYmlRaw);
-		const freshMarkdownContent = markdownContent.substring(endInd + 4);
-		const freshFrontMatter = { ...existFrontMatter, ...frontMatter, ...templateFrontMatter };
-		const frontMatterStr = stringifyYaml(freshFrontMatter);
-		return '---\n' + frontMatterStr + freshMarkdownContent;
-	}
-
-	const frontMatterStr = stringifyYaml(frontMatter);
-	return '---\n' + frontMatterStr + '---\n' + markdownContent;
+	return `---\n${stringifyYaml(properties)}---\n${generated.body}`;
 };

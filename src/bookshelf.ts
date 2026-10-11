@@ -2,7 +2,7 @@ import { get } from 'svelte/store';
 import ApiRouter from './api-router';
 import FileManager from './fileManager';
 import type { AnnotationFile, BookshelfBook, BookshelfProgress, Metadata } from './models';
-import { parseMetadata } from './parser/parseResponse';
+import { getBookCatalog } from './bookCatalog';
 import { settingsStore } from './settings';
 import { createSyncFilterContext, evaluateMetadataSyncFilter } from './syncFilter';
 import { formatTimestampToDate } from './utils/dateUtil';
@@ -20,11 +20,10 @@ export default class WereadBookshelfService {
 	constructor(private fileManager: FileManager, private apiManager: ApiRouter) {}
 
 	async getBookshelfBooks(): Promise<BookshelfBook[]> {
-		const [notebookResp, localFilesByBookId] = await Promise.all([
-			this.apiManager.getNotebooksWithRetry(),
+		const [remoteBooks, localFilesByBookId] = await Promise.all([
+			getBookCatalog(this.apiManager),
 			this.fileManager.getNotebookFilesByBookId()
 		]);
-		const remoteBooks = notebookResp.map((noteBook) => parseMetadata(noteBook));
 		const remoteBookIds = new Set(remoteBooks.map((book) => book.bookId));
 		const filterContext = createSyncFilterContext(get(settingsStore));
 		const remoteEntries = remoteBooks.map((metaData) =>

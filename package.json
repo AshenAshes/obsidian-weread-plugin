@@ -4,6 +4,7 @@
 	"description": "This is a community plugin for tencent weread (https://r.qq.com)",
 	"main": "main.ts",
 	"scripts": {
+		"test": "node --test scripts/sync-regression.test.cjs",
 		"clean": "rimraf dist main.js",
 		"build": "svelte-check && npm run lint && webpack",
 		"deploy": "NODE_ENV=development webpack && ./sync.sh",
@@ -25,6 +26,7 @@
 		"eslint-config-prettier": "^8.5.0",
 		"eslint-plugin-obsidianmd": "^0.3.0",
 		"eslint-plugin-prettier": "^4.0.0",
+		"js-yaml": "^4.3.2",
 		"obsidian": "^1.4.11",
 		"prettier": "^3.8.3",
 		"style-loader": "^3.3.3",

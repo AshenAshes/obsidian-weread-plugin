@@ -8,6 +8,7 @@ import WereadPlugin from '../main';
 import type { SyncLogEntry, Theme } from './models';
 
 export type SyncMode = 'blacklist' | 'whitelist';
+export type SyncScope = 'notebooks' | 'reading';
 export type ReadingOpenMode = 'TAB' | 'WINDOW';
 export type BookOpenMode = 'web' | 'app';
 export type BookshelfSortMode = 'recent' | 'title';
@@ -76,6 +77,7 @@ export interface WereadPluginSettings {
 	notesBlacklist: string;
 	notesWhitelist: string;
 	syncMode: SyncMode;
+	syncScope: SyncScope;
 	showEmptyChapterTitleToggle: boolean;
 	convertTags: boolean;
 	saveArticleToggle: boolean;
@@ -136,6 +138,7 @@ const DEFAULT_SETTINGS: WereadPluginSettings = {
 	notesBlacklist: '',
 	notesWhitelist: '',
 	syncMode: 'blacklist',
+	syncScope: 'reading',
 	showEmptyChapterTitleToggle: false,
 	convertTags: false,
 	saveArticleToggle: true,
@@ -513,6 +516,10 @@ const createSettingsStore = () => {
 		});
 	};
 
+	const setSyncScope = (syncScope: SyncScope) => {
+		store.update((state) => ({ ...state, syncScope }));
+	};
+
 	const setNotesWhitelist = (notesWhitelist: string) => {
 		store.update((state) => {
 			state.notesWhitelist = notesWhitelist;
@@ -798,6 +805,7 @@ const createSettingsStore = () => {
 			setInsertBefore,
 			setNoteBlacklist,
 			setSyncMode,
+			setSyncScope,
 			setNotesWhitelist,
 			setEmptyChapterTitleToggle,
 			setConvertTags,

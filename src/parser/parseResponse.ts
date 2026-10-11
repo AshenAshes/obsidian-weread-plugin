@@ -62,13 +62,14 @@ export const parsePopularHighlights = (resp: {
 
 export const parseMetadata = (noteBook: any): Metadata => {
 	const book = noteBook['book'];
-	const cover: string = book['cover'].replace('/s_', '/t7_');
-	const lastReadDate = window.moment(noteBook['sort'] * 1000).format('YYYY-MM-DD');
+	const cover: string = (book['cover'] ?? '').replace('/s_', '/t7_');
+	const lastReadDate = noteBook['sort'] > 0
+		? window.moment(noteBook['sort'] * 1000).format('YYYY-MM-DD') : '';
 	const bookId = book['bookId'];
 	const pcUrl = getPcUrl(bookId);
-	const author = book['author'].replace(/\[(.*?)\]/g, '【$1】');
+	const author = (book['author'] ?? '').replace(/\[(.*?)\]/g, '【$1】');
 	const metaData: Metadata = {
-		bookId: book['bookId'],
+		bookId: String(book['bookId']),
 		author: author,
 		title: book['title'],
 		url: book['url'],

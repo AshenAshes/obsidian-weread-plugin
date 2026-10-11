@@ -1,11 +1,12 @@
 import { Vault, MetadataCache, TFile, TFolder, Notice, TAbstractFile, App } from 'obsidian';
 import { Renderer } from './renderer';
-import { sanitizeTitle } from './utils/sanitizeTitle';
+import { sanitizeTitle, formatBookTitle } from './utils/sanitizeTitle';
 import { AnnotationFile, DailyNoteReferenece, Metadata, Notebook } from './models';
 import { frontMatterDocType, buildFrontMatter } from './utils/frontmatter';
 import { get } from 'svelte/store';
 import { settingsStore } from './settings';
 import { getLinesInString } from './utils/fileUtils';
+import { prepareNotebookBody, mergeManagedSections, splitFrontmatter } from './utils/managedSections';
 
 export default class FileManager {
 	private vault: Vault;
@@ -124,21 +125,30 @@ export default class FileManager {
 	}
 
 	public async saveNotebook(notebook: Notebook): Promise<string | null> {
+		const rendered = this.renderer.render(notebook);
+		const parts = splitFrontmatter(rendered);
+		const managedBody = prepareNotebookBody(parts.body, true);
+		const generated = (parts.yaml === undefined ? '' : `---\n${parts.yaml}\n---\n`) + managedBody;
 		const localFile = notebook.metaData.file;
 		if (localFile) {
 			if (localFile.new) {
 				const existingFile = localFile.file;
 				console.log(`Updating ${existingFile.path}`);
-				const freshContent = this.renderer.render(notebook);
-				const fileContent = buildFrontMatter(freshContent, notebook, existingFile, this.app);
-				await this.vault.modify(existingFile, fileContent);
+				const merge = (current: string) => {
+					const body = mergeManagedSections(splitFrontmatter(current).body, managedBody);
+					const frontmatter = splitFrontmatter(buildFrontMatter(generated, notebook, current));
+					return `---\n${frontmatter.yaml}\n---\n${body}`;
+				};
+				const current = await this.vault.read(existingFile);
+				if (merge(current) === current) return null;
+				// Re-read atomically so edits made while network requests ran are preserved.
+				await this.vault.process(existingFile, merge);
 				return existingFile.path;
 			}
 		} else {
 			const newFilePath = await this.getNewNotebookFilePath(notebook);
 			console.log(`Creating ${newFilePath}`);
-			const markdownContent = this.renderer.render(notebook);
-			const fileContent = buildFrontMatter(markdownContent, notebook, undefined, this.app);
+			const fileContent = buildFrontMatter(generated, notebook);
 			const newFile = await this.vault.create(newFilePath, fileContent);
 			return newFile.path;
 		}
@@ -219,25 +229,18 @@ export default class FileManager {
 			await this.vault.createFolder(folderPath);
 		}
 		const fileName = this.getFileName(notebook.metaData);
-		const filePath = `${folderPath}/${fileName}.md`;
+		let filePath = `${folderPath}/${fileName}.md`;
+		if (await this.vault.adapter.exists(filePath)) {
+			filePath = `${folderPath}/${fileName}-${sanitizeTitle(notebook.metaData.bookId)}.md`;
+		}
+		if (await this.vault.adapter.exists(filePath)) throw new Error('目标文件已存在，已停止创建以保护本地内容');
 		return filePath;
 	}
 
 	private getFileName(metaData: Metadata): string {
 		const fileNameType = get(settingsStore).fileNameType;
 		const baseFileName = sanitizeTitle(metaData.title);
-		const removeParens = get(settingsStore).removeParens;
-		const whitelistRaw = get(settingsStore).removeParensWhitelist || '';
-		const whitelistArr = whitelistRaw
-			.split(/\r?\n/)
-			.map((s) => s.trim())
-			.filter(Boolean);
-		// 判断是否命中白名单
-		const isWhitelisted = whitelistArr.some((keyword) => baseFileName.includes(keyword));
-		let fileName = baseFileName;
-		if (removeParens && !isWhitelisted) {
-			fileName = baseFileName.replace(/（.*）/g, '');
-		}
+		const fileName = formatBookTitle(baseFileName, get(settingsStore));
 
 		switch (fileNameType) {
 			case 'BOOK_ID':

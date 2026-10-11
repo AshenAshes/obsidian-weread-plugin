@@ -16,7 +16,7 @@ import type { BookshelfBook } from '../models';
 import { SyncLogModal } from './syncLogModal';
 import { settingsStore } from '../settings';
 import { get } from 'svelte/store';
-import { getPcUrl } from '../parser/parseResponse';
+import { formatBookTitle } from '../utils/sanitizeTitle';
 
 // 计算相对时间（中文显示）
 function getRelativeTimeInChinese(timestamp: number): string {
@@ -393,7 +393,13 @@ export class WereadBookshelfView extends ItemView {
 		this.gridEl = this.contentEl.createDiv({ cls: 'weread-bookshelf-grid' });
 
 		// 订阅设置变化，监听登录状态改变
+		let titleSettings = JSON.stringify([get(settingsStore).removeParens, get(settingsStore).removeParensWhitelist]);
 		this.settingsUnsubscribe = settingsStore.subscribe((settings) => {
+			const nextTitleSettings = JSON.stringify([settings.removeParens, settings.removeParensWhitelist]);
+			if (titleSettings !== nextTitleSettings) {
+				titleSettings = nextTitleSettings;
+				this.renderBooks();
+			}
 			const cookieChanged = settings.isCookieValid !== this.previousCookieValid;
 			const apiKeyChanged = settings.wereadApiKey !== this.previousApiKey;
 			if (cookieChanged || apiKeyChanged) {
@@ -582,8 +588,9 @@ export class WereadBookshelfView extends ItemView {
 	}
 
 	private renderCoverCard(book: BookshelfBook, container: HTMLElement): void {
+		const displayTitle = formatBookTitle(book.title, get(settingsStore));
 		const card = container.createDiv({ cls: 'weread-bookshelf-cover-card' });
-		card.setAttr('title', `查看《${book.title}》详情`);
+		card.setAttr('title', `查看《${displayTitle}》详情`);
 		card.onclick = () => {
 			this.openBookDetail(book);
 		};
@@ -597,7 +604,7 @@ export class WereadBookshelfView extends ItemView {
 				cls: 'weread-bookshelf-cover-card-img'
 			});
 			cover.src = book.cover;
-			cover.alt = book.title;
+			cover.alt = displayTitle;
 			cover.loading = 'lazy';
 		} else {
 			card.createDiv({
@@ -610,11 +617,11 @@ export class WereadBookshelfView extends ItemView {
 		if (get(settingsStore).bookshelfShowCoverTitle) {
 			const title = card.createDiv({
 				cls: 'weread-bookshelf-cover-card-title',
-				text: book.title,
-				attr: { title: book.title }
+				text: displayTitle,
+				attr: { title: displayTitle }
 			});
 			if (book.hasLocalFile) {
-				title.setAttr('title', `打开《${book.title}》本地文件`);
+				title.setAttr('title', `打开《${displayTitle}》本地文件`);
 				title.onclick = async (event) => {
 					event.stopPropagation();
 					await this.openLocalFile(book);
@@ -624,8 +631,9 @@ export class WereadBookshelfView extends ItemView {
 	}
 
 	private renderBookCard(book: BookshelfBook, container: HTMLElement = this.gridEl): void {
+		const displayTitle = formatBookTitle(book.title, get(settingsStore));
 		const card = container.createDiv({ cls: 'weread-bookshelf-card is-clickable' });
-		card.setAttr('title', `查看《${book.title}》详情`);
+		card.setAttr('title', `查看《${displayTitle}》详情`);
 		card.onclick = () => {
 			this.openBookDetail(book);
 		};
@@ -636,7 +644,7 @@ export class WereadBookshelfView extends ItemView {
 			cls: `weread-bookshelf-card-cover-wrap${book.hasLocalFile ? ' is-clickable' : ''}`
 		});
 		if (book.hasLocalFile) {
-			coverWrap.setAttr('title', `查看《${book.title}》详情`);
+			coverWrap.setAttr('title', `查看《${displayTitle}》详情`);
 			coverWrap.onclick = async (event) => {
 				event.stopPropagation();
 				this.openBookDetail(book);
@@ -647,7 +655,7 @@ export class WereadBookshelfView extends ItemView {
 				cls: 'weread-bookshelf-card-cover'
 			});
 			cover.src = book.cover;
-			cover.alt = book.title;
+			cover.alt = displayTitle;
 		} else {
 			coverWrap.createDiv({
 				cls: 'weread-bookshelf-card-cover-placeholder',
@@ -658,12 +666,12 @@ export class WereadBookshelfView extends ItemView {
 		const details = card.createDiv({ cls: 'weread-bookshelf-card-details' });
 		const title = details.createDiv({
 			cls: 'weread-bookshelf-card-title',
-			text: book.title,
-			attr: { title: book.title }
+			text: displayTitle,
+			attr: { title: displayTitle }
 		});
 		if (book.hasLocalFile) {
 			title.addClass('is-clickable');
-			title.setAttr('title', `打开《${book.title}》本地文件`);
+			title.setAttr('title', `打开《${displayTitle}》本地文件`);
 			title.onclick = async (event) => {
 				event.stopPropagation();
 				await this.openLocalFile(book);
@@ -728,27 +736,6 @@ export class WereadBookshelfView extends ItemView {
 			};
 		}
 
-		// 公众号类型的书和移动端设备不显示阅读按钮
-		if (book.remoteExists && !book.isArticle && Platform.isDesktopApp) {
-			const readButton = container.createEl('button', {
-				cls: 'clickable-icon weread-bookshelf-icon-button',
-				attr: { 'aria-label': '阅读此书' }
-			});
-			setIcon(readButton, 'book-open');
-			readButton.onclick = async (event) => {
-				event.stopPropagation();
-				const settings = get(settingsStore);
-				const url =
-					settings.bookOpenMode === 'app'
-						? `weread://reading?bId=${book.bookId}`
-						: getPcUrl(book.bookId);
-				if (settings.bookOpenMode === 'app') {
-					window.open(url);
-				} else {
-					await this.plugin.openPreferredReadingView(url);
-				}
-			};
-		}
 	}
 
 	private renderBadges(book: BookshelfBook, container: HTMLElement): void {

@@ -6,6 +6,7 @@ export type SyncFilterContext = {
 	saveArticleToggle: boolean;
 	noteCountLimit: number;
 	syncMode: SyncMode;
+	syncScope?: 'notebooks' | 'reading';
 	blacklistedBookIds: Set<string>;
 	whitelistedBookIds: Set<string>;
 };
@@ -13,13 +14,14 @@ export type SyncFilterContext = {
 export const createSyncFilterContext = (
 	settings: Pick<
 		WereadPluginSettings,
-		'saveArticleToggle' | 'noteCountLimit' | 'syncMode' | 'notesBlacklist' | 'notesWhitelist'
+		'saveArticleToggle' | 'noteCountLimit' | 'syncMode' | 'notesBlacklist' | 'notesWhitelist' | 'syncScope'
 	>
 ): SyncFilterContext => {
 	return {
 		saveArticleToggle: settings.saveArticleToggle,
 		noteCountLimit: settings.noteCountLimit,
 		syncMode: settings.syncMode,
+		syncScope: settings.syncScope,
 		blacklistedBookIds: parseBookIdList(settings.notesBlacklist),
 		whitelistedBookIds: parseBookIdList(settings.notesWhitelist)
 	};
@@ -30,7 +32,7 @@ export const evaluateMetadataSyncFilter = (
 	context: SyncFilterContext
 ): SyncFilterResult => {
 	const excludedByArticleType = !context.saveArticleToggle && metaData.bookType === 3;
-	const excludedByNoteCount = metaData.noteCount < context.noteCountLimit;
+	const excludedByNoteCount = context.syncScope !== 'reading' && metaData.noteCount < context.noteCountLimit;
 	const excludedByBlacklist =
 		context.syncMode === 'blacklist' && context.blacklistedBookIds.has(metaData.bookId);
 	const excludedByWhitelist =

@@ -2,19 +2,14 @@
 isbn: {{ metaData.isbn }}
 lastReadDate: {{ metaData.lastReadDate }}
 ---
+# 元数据
 《{{ metaData.title }}》
 {{ metaData.author }}
 {{ metaData.totalWords }}字
 {{ metaData.noteCount }}个笔记
 
-{% if bookReview.bookReviews %}
-{% for bookReview in bookReview.bookReviews %}
-◆ 点评
-{{ bookReview.createTime }}
-{{ bookReview.mdContent }}
-{% endfor %}
-{% endif %}
 
+# 高亮划线
 {% for chapter in chapterHighlights %}
 {% if chapter.level == 1 %}
 ## ◆ {{ chapter.chapterTitle }}
@@ -24,29 +19,38 @@ lastReadDate: {{ metaData.lastReadDate }}
 #### ◆ {{ chapter.chapterTitle }}
 {% endif %}
 {% for highlight in chapter.highlights %}
-{% set rangeParts = highlight.range | split("-") %}
-{% set deeplink = "weread://bestbookmark?bookId=" + metaData.bookId + "&chapterUid=" + highlight.chapterUid + "&rangeStart=" + rangeParts[0] + "&rangeEnd=" + rangeParts[1] %}
 {% if highlight.reviewContent %}
 
 {{ highlight.createTime }} 发表想法
 {{ highlight.reviewContent }}
 
 {% if syncPopularHighlightsToggle and highlight.isPopular %}
-> [{{ highlight.markText | trim }}](<{{ deeplink }}>) ^{{ highlight.bookmarkId }}
+> {{ highlight.markText | trim }}
 > 🔥 {{ highlight.popularCount }} 人共读
 {% else %}
-> [{{ highlight.markText | trim }}](<{{ deeplink }}>) ^{{ highlight.bookmarkId }}
+> {{ highlight.markText | trim }}
 {% endif %}
 
 {% else %}
 
 {% if syncPopularHighlightsToggle and highlight.isPopular %}
-> [{{ highlight.markText | trim }}](<{{ deeplink }}>) ^{{ highlight.bookmarkId }}
+> {{ highlight.markText | trim }}
 > 🔥 {{ highlight.popularCount }} 人共读
 {% else %}
-> [{{ highlight.markText | trim }}](<{{ deeplink }}>) ^{{ highlight.bookmarkId }}
+> {{ highlight.markText | trim }}
 {% endif %}
 
 {% endif %}
 {% endfor %}
 {% endfor %}
+
+# 读书笔记
+
+# 本书评论
+{% if bookReview.bookReviews %}
+{% for bookReview in bookReview.bookReviews %}
+◆ 点评
+{{ bookReview.createTime }}
+{{ bookReview.mdContent }}
+{% endfor %}
+{% endif %}

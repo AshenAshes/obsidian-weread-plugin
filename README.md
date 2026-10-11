@@ -186,6 +186,7 @@ Header 区域展示封面、阅读进度、时长、分类、出版社等元数�
 - [微信读书 Agent API](./docs/weread-agent-api.md) — V2 Agent API 接口文档
 - [微信读书 API (V1)](./docs/weread-api.md) — V1 Cookie API 参考
 - [模板编辑器](./docs/template-editor-window.md) — 模板编辑器使用说明
+- [书架同步与本地笔记保护](./docs/shelf-sync.md) — 在读/已读范围、部分更新、旧文件迁移与验收方法
 
 ## 赞赏
 
