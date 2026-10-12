@@ -1,3 +1,4 @@
+import { formatBookTitle } from './utils/sanitizeTitle';
 import { Notice, Vault } from 'obsidian';
 import ApiRouter from './api-router';
 import { settingsStore } from './settings';
@@ -141,7 +142,7 @@ function buildMarkdown(
 		lines.push('| # | 书名 | 作者 | 阅读时长 | 标签 |');
 		lines.push('|---|------|------|---------|------|');
 		annual.readLongest.forEach((item, i) => {
-			const title = item.book?.title ?? item.albumInfo?.name ?? '—';
+			const title = formatBookTitle(item.book?.title ?? item.albumInfo?.name ?? '—', get(settingsStore));
 			const author = item.book?.author ?? item.albumInfo?.authorName ?? '—';
 			const tags = item.tags?.join('、') ?? '';
 			lines.push(`| ${i + 1} | ${title} | ${author} | ${fmtDuration(item.readTime)} | ${tags} |`);
@@ -218,7 +219,7 @@ function buildMarkdown(
 		lines.push('| # | 书名 | 作者 | 阅读时长 | 标签 |');
 		lines.push('|---|------|------|---------|------|');
 		monthly.readLongest.forEach((item, i) => {
-			const title = item.book?.title ?? item.albumInfo?.name ?? '—';
+			const title = formatBookTitle(item.book?.title ?? item.albumInfo?.name ?? '—', get(settingsStore));
 			const author = item.book?.author ?? item.albumInfo?.authorName ?? '—';
 			const tags = item.tags?.join('、') ?? '';
 			lines.push(`| ${i + 1} | ${title} | ${author} | ${fmtDuration(item.readTime)} | ${tags} |`);

@@ -1,3 +1,4 @@
+import { formatBookTitle } from '../utils/sanitizeTitle';
 import { ItemView, Menu, Modal, Notice, WorkspaceLeaf, setIcon, TFile, Vault } from 'obsidian';
 import ApiRouter from '../api-router';
 import FileManager from '../fileManager';
@@ -1239,7 +1240,7 @@ export class WereadReadingStatsView extends ItemView {
 		const list = section.createDiv({ cls: 'weread-stats-book-list' });
 
 		data.readLongest.forEach((item, i) => {
-			const title = item.book?.title ?? item.albumInfo?.name ?? '未知';
+			const title = formatBookTitle(item.book?.title ?? item.albumInfo?.name ?? '未知', get(settingsStore));
 			const author = item.book?.author ?? item.albumInfo?.authorName ?? '';
 			const cover = item.book?.cover ?? item.albumInfo?.cover ?? '';
 			const bookId = item.book?.bookId ?? item.albumInfo?.albumId ?? '';

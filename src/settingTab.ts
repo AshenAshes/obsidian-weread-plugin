@@ -1,3 +1,4 @@
+import { formatBookTitle } from './utils/sanitizeTitle';
 import WereadPlugin from '../main';
 import {
 	App,
@@ -1144,10 +1145,10 @@ export class WereadSettingsTab extends PluginSettingTab {
 			const card = previewContainer.createDiv({ cls: 'weread-selected-book-card' });
 			const cover = card.createEl('img', { cls: 'weread-selected-book-cover' });
 			cover.src = book.cover;
-			cover.alt = book.title;
+			cover.alt = formatBookTitle(book.title, get(settingsStore));
 
 			const details = card.createDiv({ cls: 'weread-selected-book-details' });
-			details.createDiv({ cls: 'weread-selected-book-title', text: book.title });
+			details.createDiv({ cls: 'weread-selected-book-title', text: formatBookTitle(book.title, get(settingsStore)) });
 			details.createDiv({ cls: 'weread-selected-book-author', text: book.author });
 			details.createDiv({
 				cls: 'weread-book-selector-meta',
@@ -1428,10 +1429,10 @@ class ManualSyncBookSelectorModal extends Modal {
 	private renderBookCardDetails(card: HTMLElement, book: Metadata): void {
 		const cover = card.createEl('img', { cls: 'weread-book-selector-cover' });
 		cover.src = book.cover;
-		cover.alt = book.title;
+		cover.alt = formatBookTitle(book.title, get(settingsStore));
 
 		const details = card.createDiv({ cls: 'weread-book-selector-card-details' });
-		details.createDiv({ cls: 'weread-book-selector-title', text: book.title });
+		details.createDiv({ cls: 'weread-book-selector-title', text: formatBookTitle(book.title, get(settingsStore)) });
 		details.createDiv({ cls: 'weread-book-selector-author', text: book.author });
 		details.createDiv({
 			cls: 'weread-book-selector-meta',

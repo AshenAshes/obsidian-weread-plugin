@@ -1,3 +1,4 @@
+import { formatBookTitle } from './sanitizeTitle';
 import { parseYaml, stringifyYaml } from 'obsidian';
 import type { Notebook } from '../models';
 import { formatTimeDuration, formatTimestampToDate } from './dateUtil';
@@ -32,7 +33,7 @@ export const buildFrontMatter = (
 	Object.assign(properties, {
 		doc_type: frontMatterDocType,
 		bookId: meta.bookId,
-		title: meta.title,
+		title: formatBookTitle(meta.title, get(settingsStore)),
 		isbn: meta.isbn ?? '',
 		lastReadDate: meta.lastReadDate,
 		reviewCount: meta.reviewCount,

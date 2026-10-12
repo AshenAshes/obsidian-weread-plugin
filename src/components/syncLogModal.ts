@@ -1,3 +1,5 @@
+import { get } from 'svelte/store';
+import { formatBookTitle } from '../utils/sanitizeTitle';
 import { App, Modal, Notice, Platform, setIcon, TFile, ToggleComponent } from 'obsidian';
 import type { SyncLogEntry } from '../models';
 import { settingsStore } from '../settings';
@@ -126,7 +128,7 @@ export class SyncLogModal extends Modal {
 
 				// Note title
 				const noteTitle = noteItem.createDiv({ cls: 'sync-log-note-title' });
-				noteTitle.createSpan({ text: note.title });
+				noteTitle.createSpan({ text: formatBookTitle(note.title, get(settingsStore)) });
 
 				// Open button
 				const openBtn = noteItem.createEl('button', {

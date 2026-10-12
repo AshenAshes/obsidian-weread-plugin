@@ -1,3 +1,4 @@
+import { formatBookTitle } from './utils/sanitizeTitle';
 import * as nunjucks from 'nunjucks';
 import type { Notebook, RenderTemplate } from './models';
 import { settingsStore } from './settings';
@@ -70,7 +71,7 @@ export class Renderer {
 
 		const settings = get(settingsStore);
 		const context: RenderTemplate = {
-			metaData,
+			metaData: { ...metaData, title: formatBookTitle(metaData.title, settings) },
 			chapterHighlights,
 			bookReview,
 			popularHighlights,
@@ -117,7 +118,7 @@ export class Renderer {
 
 		const settings = get(settingsStore);
 		const context: RenderTemplate = {
-			metaData,
+			metaData: { ...metaData, title: formatBookTitle(metaData.title, settings) },
 			chapterHighlights,
 			bookReview,
 			popularHighlights,

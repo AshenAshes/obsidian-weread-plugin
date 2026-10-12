@@ -41,7 +41,7 @@ export default class FileManager {
 		const appendContent = dailyNoteRefs
 			.map((dailyNoteRef) => {
 				const headContent: string = '\n### '
-					.concat(dailyNoteRef.metaData.title)
+					.concat(formatBookTitle(dailyNoteRef.metaData.title, get(settingsStore)))
 					.concat('\n');
 				const blockList = dailyNoteRef.refBlocks.map((refBlock) => {
 					return `![[${this.getFileName(dailyNoteRef.metaData)}#^${
@@ -269,7 +269,7 @@ export default class FileManager {
 	private getSubFolderPath(metaData: Metadata): string {
 		const folderType = get(settingsStore).subFolderType;
 		if (folderType == 'title') {
-			return sanitizeTitle(metaData.title);
+			return sanitizeTitle(formatBookTitle(metaData.title, get(settingsStore)));
 		} else if (folderType == 'category') {
 			if (metaData.category) {
 				return metaData.category.split('-')[0];
