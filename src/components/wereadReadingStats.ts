@@ -1,3 +1,4 @@
+import { imageDataUrl, EXPORT_IMAGE_PLACEHOLDER, exportErrorMessage } from '../utils/exportImage';
 import { formatBookTitle } from '../utils/sanitizeTitle';
 import { ItemView, Menu, Modal, Notice, WorkspaceLeaf, setIcon, TFile, Vault } from 'obsidian';
 import ApiRouter from '../api-router';
@@ -409,42 +410,53 @@ export class WereadReadingStatsView extends ItemView {
 	}
 
 	private async exportAsImage(_btn: HTMLElement) {
-		const { toPng } = require('html-to-image');
 		const { requestUrl } = require('obsidian');
+
+        // Freeze the export DOM: asynchronous heatmap updates can rerender the live view.
+        const captureEl = this.statsEl.cloneNode(true) as HTMLElement;
+        captureEl.style.width = `${this.statsEl.offsetWidth}px`;
+        captureEl.style.position = 'fixed';
+        captureEl.style.left = '-100000px';
+        captureEl.style.pointerEvents = 'none';
+        captureEl.setAttribute('aria-hidden', 'true');
+        captureEl.style.top = '0';
+        this.statsEl.parentElement!.appendChild(captureEl);
 
 		// Show loading modal immediately
 		const loadingModal = new ExportLoadingModal(this.app);
 		loadingModal.open();
 
 		// Hide export button
-		const exportBtn = this.statsEl.querySelector<HTMLElement>('.weread-stats-export-btn');
+		const exportBtn = captureEl.querySelector<HTMLElement>('.weread-stats-export-btn');
 		if (exportBtn) exportBtn.style.display = 'none';
 
+		try {
 		// Pre-fetch images — use in-memory cache to avoid re-fetching on repeat exports
-		const imgs = Array.from(this.statsEl.querySelectorAll<HTMLImageElement>('img'));
+		const imgs = Array.from(captureEl.querySelectorAll<HTMLImageElement>('img'));
 		const origSrcs: string[] = imgs.map(img => img.src);
+		let missingCovers = 0;
 		await Promise.allSettled(imgs.map(async (img, i) => {
 			const src = origSrcs[i];
 			if (!src || src.startsWith('data:')) return;
 			try {
 				if (!this.imgCache.has(src)) {
 					const resp = await requestUrl({ url: src, method: 'GET' });
-					const mime = resp.headers['content-type'] || 'image/jpeg';
-					const b64 = btoa(String.fromCharCode(...new Uint8Array(resp.arrayBuffer)));
-					this.imgCache.set(src, `data:${mime};base64,${b64}`);
+					this.imgCache.set(src, imageDataUrl(resp.arrayBuffer));
 				}
 				img.src = this.imgCache.get(src)!;
-			} catch { /* keep original */ }
+                await img.decode();
+            } catch {
+                this.imgCache.delete(src);
+                img.src = EXPORT_IMAGE_PLACEHOLDER;
+                missingCovers++;
+            }
 		}));
 
 		// Inline SVG fill/stroke from computed styles
-		type SvgRestore = { el: SVGElement; fill: string | null; stroke: string | null; style: string };
-		const svgRestores: SvgRestore[] = [];
-		this.statsEl.querySelectorAll<SVGElement>('svg, svg *').forEach(el => {
+		captureEl.querySelectorAll<SVGElement>('svg, svg *').forEach(el => {
 			const cs = getComputedStyle(el);
 			const fill = cs.fill;
 			const stroke = cs.stroke;
-			svgRestores.push({ el, fill: el.getAttribute('fill'), stroke: el.getAttribute('stroke'), style: el.getAttribute('style') || '' });
 			el.setAttribute('fill', fill || 'none');
 			el.setAttribute('stroke', stroke || 'none');
 			const styleAttr = el.getAttribute('style') || '';
@@ -457,63 +469,51 @@ export class WereadReadingStatsView extends ItemView {
 		});
 
 		// Capture dimensions BEFORE any style changes
-		const captureWidth = this.statsEl.offsetWidth;
-		const captureHeight = this.statsEl.scrollHeight;
+		const captureWidth = captureEl.offsetWidth;
+		const captureHeight = captureEl.scrollHeight;
 
-		// Expand scroll container
-		const scrollEl = this.contentEl as HTMLElement;
-		const origOverflow = scrollEl.style.overflow;
-		const origHeight = scrollEl.style.height;
-		scrollEl.style.overflow = 'visible';
-		scrollEl.style.height = 'auto';
-
-		// Reset scroll offsets on ancestors
-		const scrollParents: { el: Element; left: number; top: number }[] = [];
-		let ancestor: Element | null = this.statsEl.parentElement;
-		while (ancestor && ancestor !== document.body) {
-			if (ancestor.scrollLeft !== 0 || ancestor.scrollTop !== 0) {
-				scrollParents.push({ el: ancestor, left: ancestor.scrollLeft, top: ancestor.scrollTop });
-				(ancestor as HTMLElement).scrollLeft = 0;
-				(ancestor as HTMLElement).scrollTop = 0;
-			}
-			ancestor = ancestor.parentElement;
-		}
-
-		try {
-			const dataUrl = await toPng(this.statsEl, {
-				pixelRatio: 1.5,
-				width: captureWidth,
-				height: captureHeight,
-				skipFonts: true,
-				cacheBust: false,
-				style: {
-					overflow: 'visible',
-					position: 'fixed',
-					left: '0',
-					top: '0',
-					margin: '0',
-				},
-			});
+        // Obsidian's injected stylesheets are not reliably copied into the renderer iframe.
+        // Freeze computed styles as well as DOM content before cloning the document.
+        const frozenStyles = [captureEl, ...Array.from(captureEl.querySelectorAll<HTMLElement>('*'))].map(node => {
+            const computed = getComputedStyle(node);
+            const properties = ['display', 'position', 'box-sizing', 'width', 'height', 'padding', 'margin', 'font-family', 'font-size', 'font-weight', 'font-style', 'line-height', 'letter-spacing', 'color', 'background-color', 'background-image', 'border', 'border-radius', 'opacity', 'text-align', 'white-space', 'flex-direction', 'flex-wrap', 'flex-grow', 'flex-shrink', 'flex-basis', 'align-items', 'justify-content', 'gap', 'grid-template-columns', 'grid-template-rows', 'grid-column', 'grid-row', 'align-self', 'justify-self', 'min-width', 'max-width', 'min-height', 'max-height', 'overflow', 'text-overflow', 'object-fit', 'vertical-align', 'text-decoration', 'fill', 'stroke', 'stroke-width'];
+            const styles = properties.map(prop => [prop, computed.getPropertyValue(prop)]);
+            return { node, styles };
+        });
+        for (const { node, styles } of frozenStyles) {
+            for (const [prop, value] of styles) node.style.setProperty(prop, value);
+        }
+            // Let Chromium lay out and paint text/SVG instead of approximating CSS in canvas.
+            const drawing = captureEl.cloneNode(true) as HTMLElement;
+            drawing.style.position = 'relative';
+            drawing.style.left = '0';
+            drawing.style.top = '0';
+            drawing.style.margin = '0';
+            drawing.style.width = `${captureWidth}px`;
+            drawing.style.height = `${captureHeight}px`;
+            drawing.style.backgroundColor = getComputedStyle(this.contentEl).backgroundColor;
+            drawing.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+            const markup = new XMLSerializer().serializeToString(drawing);
+            const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${captureWidth}" height="${captureHeight}"><foreignObject x="0" y="0" width="100%" height="100%">${markup}</foreignObject></svg>`;
+            const image = new Image();
+            image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+            await image.decode();
+            const canvas = captureEl.ownerDocument.createElement('canvas');
+            canvas.width = Math.ceil(captureWidth * 1.5);
+            canvas.height = Math.ceil(captureHeight * 1.5);
+            const context = canvas.getContext('2d')!;
+            context.scale(1.5, 1.5);
+            context.drawImage(image, 0, 0);
+            const dataUrl = canvas.toDataURL('image/png');
 			loadingModal.close();
 			new ExportPreviewModal(this.app, dataUrl, this.exportFilename(), this.app.vault).open();
+            if (missingCovers) new Notice(`已导出，${missingCovers} 张封面加载失败，已留空`);
 		} catch (e) {
 			loadingModal.close();
 			console.error('导出图片失败', e);
-			new Notice('❌ 导出图片失败：' + e.message);
+			new Notice('❌ 导出图片失败：' + exportErrorMessage(e));
 		} finally {
-			if (exportBtn) exportBtn.style.display = '';
-			imgs.forEach((img, i) => { img.src = origSrcs[i]; });
-			svgRestores.forEach(({ el, fill, stroke, style }) => {
-				if (fill === null) el.removeAttribute('fill'); else el.setAttribute('fill', fill);
-				if (stroke === null) el.removeAttribute('stroke'); else el.setAttribute('stroke', stroke);
-				if (style === '') el.removeAttribute('style'); else el.setAttribute('style', style);
-			});
-			scrollParents.forEach(({ el, left, top }) => {
-				(el as HTMLElement).scrollLeft = left;
-				(el as HTMLElement).scrollTop = top;
-			});
-			scrollEl.style.overflow = origOverflow;
-			scrollEl.style.height = origHeight;
+            captureEl.remove();
 		}
 	}
 

@@ -31,6 +31,7 @@ function harness() {
 		}
 	};
 	const context = vm.createContext({
+        btoa,
 		console: { log() {}, debug() {}, warn() {}, error() {} },
 		window: {
 			moment: (time = Date.now()) => ({
@@ -504,4 +505,17 @@ test('title filtering handles both parentheses, nested groups and whitelist', ()
  assert.equal(formatBookTitle('书名(未闭合', enabled), '书名(未闭合');
  assert.equal(formatBookTitle('书名(版本)', { removeParens: false }), '书名(版本)');
  assert.equal(formatBookTitle('书名(版本)', { ...enabled, removeParensWhitelist: '书名' }), '书名(版本)');
+});
+
+
+test('export encodes large imported covers safely and rejects non-images', () => {
+ const { imageDataUrl, exportErrorMessage } = harness().load('src/utils/exportImage.ts');
+ const bytes = new Uint8Array(900000);
+ bytes.set([255,216,255]);
+ const url = imageDataUrl(bytes.buffer);
+ assert.ok(url.startsWith('data:image/jpeg;base64,'));
+ assert.deepEqual(Buffer.from(url.split(',')[1], 'base64'), Buffer.from(bytes));
+ assert.ok(imageDataUrl(Uint8Array.from([137,80,78,71,13,10,26,10]).buffer).startsWith('data:image/png;'));
+ assert.throws(() => imageDataUrl(Uint8Array.from([60,104,116,109,108]).buffer));
+ assert.ok(!exportErrorMessage({ type: 'error' }).includes('undefined'));
 });
