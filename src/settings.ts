@@ -7,6 +7,18 @@ import separatedTemplate from './themes/separatedTemplate.njk';
 import WereadPlugin from '../main';
 import type { SyncLogEntry, Theme, CommunityBook } from './models';
 
+export function normalizeJournalExcludedBookIds(value: unknown): string[] {
+	if (!Array.isArray(value)) return [];
+	const ids = value.map((id: unknown) =>
+		typeof id === 'string'
+			? id.trim()
+			: typeof id === 'number' && Number.isFinite(id)
+				? String(id)
+				: ''
+	);
+	return [...new Set(ids.filter(Boolean))];
+}
+
 export type SyncMode = 'blacklist' | 'whitelist';
 export type SyncScope = 'notebooks' | 'reading';
 export type ReadingOpenMode = 'TAB' | 'WINDOW';
@@ -100,6 +112,12 @@ export interface WereadPluginSettings {
 	lastSyncBookCount: number;
 	lastSyncBookTitles: string[];
 	syncLogs: SyncLogEntry[];
+	journalRefreshHours: number;
+	journalExcludedBookIds: string[];
+	journalIncludeArticles: boolean;
+	favoritesViewMode: 'cards' | 'list';
+	favoritesCanvasFolder: string;
+	favoritesCanvasLocationVersion: 0 | 1;
 	bookshelfSortMode: BookshelfSortMode;
 	bookshelfViewMode: BookshelfViewMode;
 	bookshelfShowCoverTitle: boolean;
@@ -162,6 +180,12 @@ const DEFAULT_SETTINGS: WereadPluginSettings = {
 	lastSyncBookCount: 0,
 	lastSyncBookTitles: [],
 	syncLogs: [],
+	journalRefreshHours: 24,
+	journalExcludedBookIds: [],
+	journalIncludeArticles: true,
+	favoritesViewMode: 'cards',
+	favoritesCanvasFolder: '',
+	favoritesCanvasLocationVersion: 0,
 	bookshelfSortMode: 'recent',
 	bookshelfViewMode: 'list',
 	bookshelfShowCoverTitle: true,
@@ -180,6 +204,15 @@ const createSettingsStore = () => {
 	const store = writable(DEFAULT_SETTINGS as WereadPluginSettings);
 
 	let _plugin!: WereadPlugin;
+	let persistence: Promise<void> | undefined;
+	let publishingLocation = false;
+	const enqueueSave = (save: () => Promise<void>): Promise<void> => {
+		const operation = persistence ? persistence.then(save, save) : save();
+		const settled = operation.catch((): void => undefined);
+		persistence = settled;
+		void settled.then(() => { if (persistence === settled) persistence = undefined; });
+		return operation;
+	};
 
 	const initialise = async (plugin: WereadPlugin): Promise<void> => {
 		const loadedData = await plugin.loadData();
@@ -191,6 +224,8 @@ const createSettingsStore = () => {
 		const { manualSyncMode, ...restData } = data;
 		const settings: WereadPluginSettings = {
 			...restData,
+			journalExcludedBookIds: normalizeJournalExcludedBookIds(data.journalExcludedBookIds),
+			journalIncludeArticles: typeof rawData.journalIncludeArticles === 'boolean' ? rawData.journalIncludeArticles : DEFAULT_SETTINGS.journalIncludeArticles,
 			syncMode:
 				data.syncMode === 'blacklist' || data.syncMode === 'whitelist'
 					? data.syncMode
@@ -309,16 +344,30 @@ const createSettingsStore = () => {
 
 		_plugin = plugin;
 		store.set(settings);
+		await persistence;
 	};
 
-	store.subscribe(async (settings) => {
-		if (_plugin) {
-			const data = {
-				...settings
-			};
-			await _plugin.saveData(data);
+	store.subscribe((settings) => {
+		if (_plugin && !publishingLocation) {
+			const data = { ...settings };
+			void enqueueSave(() => _plugin.saveData({
+				...data,
+				favoritesCanvasFolder: get(store).favoritesCanvasFolder,
+				favoritesCanvasLocationVersion: get(store).favoritesCanvasLocationVersion
+			})).catch(() => console.error('[weread plugin] 设置保存失败'));
 		}
 	});
+
+	const commitFavoritesCanvasLocation = (folder: string, version: 1): Promise<void> =>
+		enqueueSave(async () => {
+			if (!_plugin) throw new Error('收藏设置尚未加载');
+			const next = { ...get(store), favoritesCanvasFolder: folder, favoritesCanvasLocationVersion: version };
+			await _plugin.saveData(next);
+			publishingLocation = true;
+			try {
+				store.update((current) => ({ ...current, favoritesCanvasFolder: folder, favoritesCanvasLocationVersion: version }));
+			} finally { publishingLocation = false; }
+		});
 
 	const setLoginMethod = (method: string) => {
 		store.update((settings) => {
@@ -783,10 +832,27 @@ const createSettingsStore = () => {
 		});
 	};
 
+	const setJournalRefreshHours = (hours: number) => {
+		store.update((state) => ({ ...state, journalRefreshHours: hours === 12 ? 12 : 24 }));
+	};
+
+	const setJournalExcludedBookIds = (ids: unknown) => {
+		store.update((state) => ({
+			...state,
+			journalExcludedBookIds: normalizeJournalExcludedBookIds(ids)
+		}));
+	};
+
+	const setFavoritesViewMode = (mode: 'cards' | 'list') => {
+		store.update((state) => ({ ...state, favoritesViewMode: mode === 'list' ? 'list' : 'cards' }));
+	};
+
 	return {
 		subscribe: store.subscribe,
 		initialise,
 		actions: {
+			setJournalIncludeArticles: (value: boolean) => store.update(state => ({ ...state, journalIncludeArticles: value })),
+			commitFavoritesCanvasLocation, setFavoritesViewMode, setJournalRefreshHours, setJournalExcludedBookIds,
 			setCommunityBook: (sourceId: string, book?: CommunityBook) => {
 				store.update((state) => {
 					const mappings = { ...state.communityBooks };

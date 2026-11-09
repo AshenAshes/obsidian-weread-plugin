@@ -78,6 +78,7 @@ export const parseMetadata = (noteBook: any): Metadata => {
 		noteCount: noteBook['noteCount'],
 		reviewCount: noteBook['reviewCount'],
 		bookType: book['type'],
+		shelfCategory: typeof book.category === 'string' ? book.category : undefined,
 		lastReadDate: lastReadDate,
 		pcUrl: pcUrl
 	};
@@ -85,7 +86,7 @@ export const parseMetadata = (noteBook: any): Metadata => {
 };
 
 const convertTagToBiLink = (review: string) => {
-	return review.replace(/(?<=^|\s)#([^\s]+)/g, '[[$1]]');
+	return review.replace(/(^|\s)#([^\s]+)/g, '$1[[$2]]');
 };
 
 export const parseHighlights = (
@@ -424,9 +425,9 @@ const getFa = (id: string): [string, string[]] => {
 	return ['4', [d]];
 };
 
-export const getPcUrl = (bookId: string): string => {
-	const str = CryptoJS.MD5(bookId).toString(CryptoJS.enc.Hex);
-	const fa = getFa(bookId);
+export const encodeWereadId = (id: string): string => {
+	const str = CryptoJS.MD5(id).toString(CryptoJS.enc.Hex);
+	const fa = getFa(id);
 	let strSub = str.slice(0, 3);
 	strSub += fa[0];
 	strSub += '2' + str.slice(str.length - 2, str.length);
@@ -449,6 +450,13 @@ export const getPcUrl = (bookId: string): string => {
 	}
 
 	strSub += CryptoJS.MD5(strSub).toString(CryptoJS.enc.Hex).slice(0, 3);
-	const prefix = 'https://weread.qq.com/web/reader/';
-	return prefix + strSub;
+	return strSub;
+};
+
+export const getPcUrl = (bookId: string): string => {
+	return `https://weread.qq.com/web/reader/${encodeWereadId(bookId)}`;
+};
+
+export const getChapterReaderUrl = (bookId: string, chapterUid: number): string => {
+	return `https://weread.qq.com/web/reader/${encodeWereadId(bookId)}k${encodeWereadId(String(chapterUid))}`;
 };

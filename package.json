@@ -4,7 +4,7 @@
 	"description": "This is a community plugin for tencent weread (https://r.qq.com)",
 	"main": "main.ts",
 	"scripts": {
-		"test": "node --test scripts/sync-regression.test.cjs",
+		"test": "node --test scripts/sync-regression.test.cjs tests/*.mjs",
 		"clean": "rimraf dist main.js",
 		"build": "svelte-check && npm run lint && webpack",
 		"deploy": "NODE_ENV=development webpack && ./sync.sh",
@@ -14,6 +14,7 @@
 	"author": "",
 	"license": "MIT",
 	"devDependencies": {
+		"acorn": "^8.16.0",
 		"@eslint/compat": "^2.1.0",
 		"@eslint/js": "^9.39.4",
 		"@types/node": "^16.11.35",

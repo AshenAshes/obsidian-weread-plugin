@@ -45,6 +45,13 @@ function sections(body: string): { start: number; end: number }[] {
 }
 
 /** Validate the four headings and leave the local section empty for new files. */
+/** The detail fallback may only interpret highlights, never the author's local notes. */
+export function getNotebookHighlightSection(markdown: string): string {
+ const { body } = splitFrontmatter(markdown);
+ const { start, end } = sections(body)[1];
+ return body.slice(start, end);
+}
+
 export function prepareNotebookBody(body: string, fresh = false): string {
 	const ranges = sections(body);
 	if (!fresh) return body;

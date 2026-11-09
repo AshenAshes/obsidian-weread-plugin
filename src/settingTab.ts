@@ -20,6 +20,7 @@ import WereadLoginModel from './components/wereadLoginModel';
 import WereadLogoutModel from './components/wereadLogoutModel';
 import CookieCloudConfigModal from './components/cookieCloudConfigModel';
 import { ThemeManagerModal } from './components/themeManagerModal';
+import { WereadReencounterBooksModal } from './components/wereadReencounterBooksModal';
 
 import ApiRouter from './api-router';
 import { parseBookIdList } from './utils/bookIdUtils';
@@ -203,10 +204,46 @@ export class WereadSettingsTab extends PluginSettingTab {
 			});
 	}
 
+	private favoritesCanvasFolderSetting(): void {
+		let draft = get(settingsStore).favoritesCanvasFolder;
+		let input: TextComponent;
+		const setting = new Setting(this.containerEl).setName('收藏画布保存目录');
+		const describe = () => setting.setDesc(
+			`默认保存在笔记库根目录，留空表示根目录。当前：${this.plugin.favoritesService.getCanvasPath()}。应用时保留原目录；目标目录已有收藏文件时不会覆盖。`
+		);
+		describe();
+		setting.addText((text) => {
+			input = text;
+			return text.setPlaceholder('根目录（默认）或 Books/Weread')
+				.setValue(typeof draft === 'string' ? draft : '')
+				.onChange((value) => { draft = value; });
+		}).addButton((button) => button.setButtonText('选择').onClick(() => {
+			this.createFolderSuggestModal((value) => {
+				draft = value === '/' ? '' : value;
+				input.setValue(draft);
+			}).open();
+		})).addButton((button) => button.setButtonText('应用').onClick(async () => {
+			button.setDisabled(true);
+			input.setDisabled(true);
+			try {
+				await this.plugin.favoritesService.changeCanvasFolder(draft);
+				draft = get(settingsStore).favoritesCanvasFolder;
+				input.setValue(draft);
+				describe();
+				new Notice('收藏画布目录已应用，原文件已保留');
+			} catch (error) {
+				new Notice(error instanceof Error ? error.message : '收藏画布目录更新失败，原目录已保留');
+			} finally {
+				button.setDisabled(false);
+				input.setDisabled(false);
+			}
+		}));
+	}
+
 	private bookOpenModeSetting(): void {
 		new Setting(this.containerEl)
-			.setName('书架阅读入口')
-			.setDesc('点击详情页阅读链接时，跳转到网页版还是 App')
+			.setName('阅读入口')
+			.setDesc('书籍详情、今日、回顾和收藏中的原文链接使用网页版或微信读书 App。')
 			.addDropdown((dropdown) => {
 				return dropdown
 					.addOption('web', '网页版')
@@ -222,7 +259,7 @@ export class WereadSettingsTab extends PluginSettingTab {
 		new Setting(this.containerEl)
 			.setName('网页版打开方式')
 			.setDesc(
-				'控制书架中的”进入网页版”和详情页中的”打开网页版详情”默认在新标签页还是新窗口打开'
+				'控制书架、详情、今日、回顾、收藏中的网页版阅读入口默认在新标签页还是新窗口打开'
 			)
 			.addDropdown((dropdown) => {
 				return dropdown
@@ -237,6 +274,37 @@ export class WereadSettingsTab extends PluginSettingTab {
 
 	private bookshelfSettings(): void {
 		new Setting(this.containerEl).setName('书架设置').setHeading();
+		new Setting(this.containerEl)
+			.setName('收藏默认视图')
+			.setDesc('收藏保存在配置目录的 favorites.canvas，可在收藏页打开原生画布；跨登录保留，不随笔记缓存清理。')
+			.addDropdown((dropdown) => dropdown
+				.addOption('cards', '卡片视图')
+				.addOption('list', '列表视图')
+				.setValue(get(settingsStore).favoritesViewMode ?? 'cards')
+				.onChange((value) => settingsStore.actions.setFavoritesViewMode(value as 'cards' | 'list')));
+		this.favoritesCanvasFolderSetting();
+		new Setting(this.containerEl)
+			.setName('今日与回顾更新频率')
+			.setDesc('首次整理后复用本地缓存；按划线和想法数量校验，仅更新有变化的书。可在页面手动刷新。')
+			.addDropdown((dropdown) => dropdown
+				.addOption('24', '每天一次')
+				.addOption('12', '每天两次')
+				.setValue(String(get(settingsStore).journalRefreshHours))
+				.onChange((value) => settingsStore.actions.setJournalRefreshHours(Number(value))));
+		new Setting(this.containerEl)
+			.setName('旧句重逢包含公众号')
+			.setDesc('仅控制「今日」与「回顾」的旧句重逢是否包含公众号，不影响笔记同步、完整回顾和收藏。')
+			.addToggle((toggle) => toggle
+				.setValue(get(settingsStore).journalIncludeArticles)
+				.onChange((value) => settingsStore.actions.setJournalIncludeArticles(value)));
+		new Setting(this.containerEl)
+			.setName('旧句重逢排除书籍')
+			.setDesc('选中的书籍将从「今日」与「回顾」的旧句重逢中排除，仅影响旧句推荐。')
+			.addButton((button) => {
+				const updateText = (ids: string[]) => button.setButtonText(`选择书籍（已排除 ${ids.length} 本）`);
+				updateText(get(settingsStore).journalExcludedBookIds);
+				button.onClick(() => new WereadReencounterBooksModal(this.plugin, updateText).open());
+			});
 			this.readingOpenModeSetting();
 			this.bookOpenModeSetting();
 

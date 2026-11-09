@@ -194,8 +194,8 @@ class ApiV2Manager {
 	 * 校验 API Key 有效性（轻量级调用 /_list）
 	 */
 	async validateApiKey(): Promise<{ valid: boolean }> {
-		const result = await this.callAgent<{ errcode?: number }>('/_list');
-		return { valid: result?.errcode === undefined || result?.errcode === 0 };
+		const result = await this.callAgent<{ errcode?: number; upgrade_info?: unknown }>('/_list');
+		return { valid: result != null && typeof result === 'object' && !Array.isArray(result) && !result.upgrade_info && (result.errcode === undefined || result.errcode === 0) };
 	}
 
 	/**

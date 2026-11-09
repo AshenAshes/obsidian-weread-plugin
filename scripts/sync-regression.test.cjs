@@ -14,6 +14,7 @@ function harness() {
 	const queue = [];
 	const obsidian = {
 		ItemView: class {},
+        Component: class {},
 		Modal: class {},
 		Platform: { isDesktopApp: true },
 		Notice: class {
@@ -49,6 +50,7 @@ function harness() {
 	function load(filename) {
 		filename = path.resolve(root, filename);
 		if (!path.extname(filename)) filename += '.ts';
+		if (filename.endsWith('.css')) return {};
 		if (cache.has(filename)) return cache.get(filename).exports;
 		if (filename.endsWith('.njk') || filename.endsWith('.html'))
 			return fs.readFileSync(filename, 'utf8');
@@ -436,7 +438,7 @@ test('bookshelf first paint is local, refreshes coalesce and failed refresh reta
 test('bookshelf renders before remote resolves and ignores responses after closing', async () => {
  const h = harness();
  h.load('src/settings.ts').settingsStore.actions.setWereadApiKey('test-only');
- const View = h.load('src/components/wereadBookshelf.ts').WereadBookshelfView;
+ const View = h.load('src/components/wereadBookshelf.ts').WereadBookshelfPanel;
  let release;
  const remote = new Promise((resolve) => { release = resolve; });
  const view = Object.create(View.prototype);
@@ -460,25 +462,31 @@ test('bookshelf renders before remote resolves and ignores responses after closi
 test('community mapping routes only public content and unlink restores original book', async () => {
  const h = harness();
  const store = h.load('src/settings.ts').settingsStore;
- const View = h.load('src/components/wereadBookDetailView.ts').WereadBookDetailView;
+ const View = h.load('src/components/wereadBookDetailPanel.ts').WereadBookDetailPanel;
  const view = Object.create(View.prototype);
- view.bookId = 'CB_imported'; view.requestGeneration = 0;
- view.renderLoadingState = () => {};
+ Object.assign(view, {bookId: 'CB_imported', generation: 0, active: true, pending: new Set(), render() {}});
  const calls = [];
- view.apiRouter = {};
+ view.api = {};
  for (const method of ['getBook', 'getProgress', 'getNotebookHighlights', 'getNotebookReviews', 'getBestBookmarks', 'getPublicReviews']) {
-  view.apiRouter[method] = async (id) => { calls.push([method, id]); return { items: [], chapters: [], reviews: [] }; };
+  view.api[method] = async (id) => { calls.push([method, id]); return { items: [], chapters: [], reviews: [] }; };
  }
  store.actions.setCommunityBook('CB_imported', { bookId: '123', title: '书城版', author: '作者' });
- await view.loadAllData();
+ await view.loadData();
  assert.deepEqual(calls.slice(0, 4).map((call) => call[1]), Array(4).fill('CB_imported'));
  assert.deepEqual(calls.slice(4).map((call) => call[1]), ['123', '123']);
  assert.equal(view.communitySource.bookId, '123');
- assert.ok(view.buildDeepLink(47, '10-20', view.communitySource.bookId).includes('bookId=123'));
- assert.ok(view.buildDeepLink(3, '10-20').includes('bookId=CB_imported'));
+ // The same chapter number can refer to different text in the two editions.
+ const node = { dataset: {}, createEl() { return this; }, createDiv() { return this; }, createSpan() { return this; } };
+ const targets = [];
+ view.body = node;
+ view.favoriteButton = () => {};
+ view.sourceAndCopy = (_node, chapter, range, _title, _text, target) => targets.push([target, chapter, range]);
+ view.renderHighlights([{ chapterUid: 3, range: '1-2', markText: '个人原文' }], [], true);
+ view.renderHighlights([{ chapterUid: 47, range: '5-9', markText: '社区原文' }], [], false);
+ assert.deepEqual(targets, [['CB_imported', 3, '1-2'], ['123', 47, '5-9']]);
  store.actions.setCommunityBook('CB_imported');
  calls.length = 0;
- await view.loadAllData();
+ await view.loadData();
  assert.equal(view.communitySource, undefined);
  assert.ok(calls.every((call) => call[1] === 'CB_imported'));
 });
@@ -518,4 +526,26 @@ test('export encodes large imported covers safely and rejects non-images', () =>
  assert.ok(imageDataUrl(Uint8Array.from([137,80,78,71,13,10,26,10]).buffer).startsWith('data:image/png;'));
  assert.throws(() => imageDataUrl(Uint8Array.from([60,104,116,109,108]).buffer));
  assert.ok(!exportErrorMessage({ type: 'error' }).includes('undefined'));
+});
+
+test('detail fallback excludes local writing and rejects ambiguous module boundaries', () => {
+ const { getNotebookHighlightSection } = harness().load('src/utils/managedSections.ts');
+ assert.equal(getNotebookHighlightSection(legacy), '# 高亮划线\nold highlights\n\n');
+ assert.throws(() => getNotebookHighlightSection(legacy.replace('# 读书笔记', '# 高亮划线')));
+});
+
+
+test('shelf genre filters the existing book list without changing type or sync selection', () => {
+ const { load } = harness();
+ const view = Object.create(load('src/components/wereadBookshelf.ts').WereadBookshelfPanel.prototype);
+ const parse = load('src/parser/parseResponse.ts').parseMetadata;
+ const service = load('src/bookshelf.ts').default;
+ const meta = parse({book:{bookId:'1', title:'科幻书', author:'甲', category:'文学-科幻'}});
+ const book = new service({}, {}).buildRemoteBook(meta, undefined, load('src/syncFilter.ts').createSyncFilterContext(load('src/settings.ts').DEFAULT_SETTINGS ?? require('svelte/store').get(load('src/settings.ts').settingsStore)));
+ assert.equal(book.category, '文学');
+ Object.assign(view, {shelfBooks:[book, {...book, bookId:'2', category:undefined}, {...book,bookId:'3',isArticle:true}], searchKeyword:'', categoryFilter:'book',syncStatusFilter:'all',readingStatusFilter:'all',sortBooks:()=>0});
+ for (const [filter, ids] of [['all',['1','2']],['category:文学',['1']],['unknown',['2']]]) {
+   view.genreFilter=filter;
+   assert.deepEqual(Array.from(view.getFilteredBooks(), b=>b.bookId),ids);
+ }
 });

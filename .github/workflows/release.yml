@@ -35,9 +35,10 @@ jobs:
         run: |
           npm install
           npm run build
-          mkdir ${{ env.PLUGIN_NAME }}
-          cp -R ./dist/. ${{ env.PLUGIN_NAME }}/
-          zip -r ${{ env.PLUGIN_NAME }}.zip ${{ env.PLUGIN_NAME }}
+          plugin_id=$(node -p "require('./dist/manifest.json').id")
+          mkdir "$plugin_id"
+          cp -R ./dist/. "$plugin_id/"
+          zip -r ${{ env.PLUGIN_NAME }}.zip "$plugin_id"
           ls
           echo "::set-output name=tag_name::$(git tag --sort version:refname | tail -n 1)"
 

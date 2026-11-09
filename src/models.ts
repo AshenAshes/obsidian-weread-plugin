@@ -1,4 +1,23 @@
 import { TFile } from 'obsidian';
+import type { JournalNote } from './journalHelpers';
+
+export interface FavoriteEntry {
+	id: string;
+	note: JournalNote;
+	favoritedAt: number;
+	updatedAt: number;
+	deletedAt?: number;
+}
+
+export interface FavoritesState {
+	favorites: FavoriteEntry[];
+	loaded: boolean;
+	loading: boolean;
+	writable: boolean;
+	error: string;
+	warning: string;
+	pendingIds: string[];
+}
 
 export interface HighlightResponse {
 	synckey: number;
@@ -344,6 +363,7 @@ export type Notebook = {
 };
 
 export type Metadata = {
+	shelfCategory?: string;
 	finishReading?: number;
 	progressResponse?: BookProgressResponse;
 	bookId: string;
@@ -496,6 +516,7 @@ export type BookshelfProgress = {
 };
 
 export type BookshelfBook = {
+	category?: string;
 	bookId: string;
 	title: string;
 	author: string;
@@ -528,6 +549,9 @@ export type SyncLogEntry = {
 	notes: SyncedNote[];
 	success: boolean;
 	errorMessage?: string;
+	failedBooks?: number;
+	cancelled?: boolean;
+	failures?: { bookId: string; title: string; stage: string; errorMessage: string }[];
 };
 
 export type RecentBook = {

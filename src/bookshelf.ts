@@ -10,6 +10,11 @@ import { formatTimestampToDate } from './utils/dateUtil';
 const PROGRESS_CONCURRENCY = 4;
 const PROGRESS_TEXT_PATTERN = /^(\d+(?:\.\d+)?)%?$/;
 
+export function getBookshelfCategory(value: unknown): string | undefined {
+	if (typeof value !== 'string') return undefined;
+	return value.split('-', 1)[0].trim() || undefined;
+}
+
 const IDLE_PROGRESS: BookshelfProgress = {
 	state: 'idle'
 };
@@ -146,6 +151,7 @@ export default class WereadBookshelfService {
 		return {
 			bookId: metaData.bookId,
 			title: metaData.title,
+			category: getBookshelfCategory(metaData.shelfCategory),
 			author: metaData.author,
 			cover: metaData.cover,
 			noteCount: metaData.noteCount,
