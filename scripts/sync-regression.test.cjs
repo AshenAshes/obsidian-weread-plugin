@@ -549,3 +549,64 @@ test('shelf genre filters the existing book list without changing type or sync s
    assert.deepEqual(Array.from(view.getFilteredBooks(), b=>b.bookId),ids);
  }
 });
+
+
+test('shelf sync persists checkpoints, selectively fetches changed books, retries failures and honors force', async () => {
+ const h = harness();
+ const Sync = h.load('src/syncNotebooks.ts').default;
+ const { settingsStore } = h.load('src/settings.ts');
+ const shelf = ['a','b','c'].map(bookId=>({bookId,title:bookId,finishReading:0,readUpdateTime:1}));
+ const notes = [{bookId:'a',sort:8,noteCount:2,reviewCount:1}];
+ let overview=0, queried=[], details=[], fail, clock=100;
+ const files=new Map(), disk=new Map();
+ const api={
+   getShelf:async()=>{overview++;return {books:shelf};},
+   getReadingNotebooks:async()=>{overview++;return notes;},
+   getReadingProgress:async id=>{queried.push(id);return {book:{progress:id==='c'?0:33}};}
+ };
+ const fm={getNotebookFiles:async()=>Array.from(files.values(), file=>({bookId:file.basename,file}))};
+ const vault={adapter:{exists:async p=>disk.has(p),read:async p=>disk.get(p),write:async(p,s)=>disk.set(p,s)},
+   getAbstractFileByPath:p=>Array.from(files.values()).find(f=>f.path===p)};
+ async function run(force=false){
+   overview=0;queried=[];details=[];
+   // New instance on every run also exercises persistence across plugin reloads.
+   const sync=new Sync(fm,api,vault,'plugin');
+   sync.convertToNotebook=async m=>{details.push(m.bookId);if(fail===m.bookId)throw Error('transient');return {metaData:m};};
+   sync.saveNotebook=async n=>{const id=n.metaData.bookId;
+     if(files.has(id))return null;
+     files.set(id,{path:id+'.md',basename:id,stat:{mtime:++clock}});return id+'.md';
+   };
+   const catalogs=[];
+   await sync.syncNotebooks(force,'2026-11-10',undefined,books=>catalogs.push(books.map(b=>b.bookId)));
+   assert.equal(overview,2);assert.equal(catalogs.length,1);assert.equal(catalogs[0].join(','),'a,b');
+   return [queried.join(','),details.join(',')];
+ }
+ assert.deepEqual(await run(),['a,b,c','a,b']);
+ assert.deepEqual(await run(),['','']);
+ // The post-sync bookshelf refresh and a fresh panel must not acknowledge new changes.
+ const reader = new Sync(fm,api,vault,'plugin');
+ queried=[]; await reader.getBookshelfCatalog(); assert.deepEqual(queried,[]);
+ notes[0].sort++; // An edited note, but counts are unchanged.
+ await reader.getBookshelfCatalog();assert.deepEqual(queried,['a']);
+ assert.deepEqual(await run(),['a','a']);
+ shelf[1].readUpdateTime++;fail='b';
+ assert.deepEqual(await run(),['b','b']);fail=undefined;
+ assert.deepEqual(await run(),['b','b']);
+ files.delete('a');
+ assert.deepEqual(await run(),['a','a']);
+ files.get('b').stat.mtime++; assert.deepEqual(await run(),['b','b']);
+ settingsStore.actions.setRemoveParens(true);
+ assert.deepEqual(await run(),['a,b,c','a,b']);
+ assert.deepEqual(await run(true),['a,b,c','a,b']);
+ delete shelf[1].readUpdateTime;
+ assert.deepEqual(await run(),['b','b']);
+ assert.deepEqual(await run(),['b','']); // Unknown timestamp: recheck progress.
+ settingsStore.actions.setWereadApiKey('different-account');
+ assert.deepEqual(await run(),['a,b,c','a,b']);
+ settingsStore.actions.setNoteBlacklist('a'); notes[0].sort++;
+ assert.deepEqual(await run(),['a,b','']);
+ assert.deepEqual(await run(),['b','']);
+ settingsStore.actions.setNoteBlacklist('');
+ assert.deepEqual(await run(),['b','a']); // Prior exclusion never acknowledged content sync.
+
+});

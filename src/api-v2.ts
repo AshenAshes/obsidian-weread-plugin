@@ -10,7 +10,9 @@ export type ShelfBook = {
 	cover?: string;
 	finishReading: number;
 	readUpdateTime?: number;
+	updateTime?: number;
 	type?: number;
+	category?: string;
 };
 
 class ApiV2Manager {

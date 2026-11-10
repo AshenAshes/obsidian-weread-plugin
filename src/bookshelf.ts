@@ -28,7 +28,16 @@ export default class WereadBookshelfService {
 		return JSON.stringify([settings.wereadApiKey, settings.cookies, settings.userVid, settings.syncScope]);
 	}
 
-	async getInitialBookshelfBooks(): Promise<{ books: BookshelfBook[]; localOnly: boolean }> {
+	catalogPublisher(): (books: Metadata[]) => void {
+        const key = this.catalogKey();
+        return books => {
+            if (this.catalogKey() !== key) return;
+            this.pendingCatalog.delete(key);
+            this.catalogCache = { key, books };
+        };
+    }
+
+    async getInitialBookshelfBooks(): Promise<{ books: BookshelfBook[]; localOnly: boolean }> {
 		const key = this.catalogKey();
 		const remote = this.catalogCache?.key === key ? this.catalogCache.books : undefined;
 		return { books: await this.buildBooks(remote ?? []), localOnly: remote === undefined };
@@ -36,18 +45,20 @@ export default class WereadBookshelfService {
 
 	private progressCache = new Map<string, BookshelfProgress>();
 
-	constructor(private fileManager: FileManager, private apiManager: ApiRouter) {}
+	constructor(private fileManager: FileManager, private apiManager: ApiRouter, private fetchCatalog = () => getBookCatalog(apiManager)) {}
 
 	async getBookshelfBooks(): Promise<BookshelfBook[]> {
 		const key = this.catalogKey();
 		let pending = this.pendingCatalog.get(key);
 		if (!pending) {
-			pending = getBookCatalog(this.apiManager);
+			pending = this.fetchCatalog();
 			this.pendingCatalog.set(key, pending);
 		}
 		try {
 			const books = await pending;
-			if (key === this.catalogKey()) this.catalogCache = { key, books };
+			if (this.pendingCatalog.get(key) !== pending && this.catalogCache?.key === key)
+                return await this.buildBooks(this.catalogCache.books);
+            if (key === this.catalogKey()) this.catalogCache = { key, books };
 			return await this.buildBooks(books);
 		} finally {
 			if (this.pendingCatalog.get(key) === pending) this.pendingCatalog.delete(key);

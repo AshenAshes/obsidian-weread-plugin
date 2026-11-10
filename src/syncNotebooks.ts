@@ -1,3 +1,4 @@
+import { SyncIndex } from './syncIndex';
 import ApiRouter from './api-router';
 import FileManager from './fileManager';
 import PopularHighlightsCacheManager from './popularHighlightsCache';
@@ -30,7 +31,7 @@ export default class SyncNotebooks {
 	private apiManager: ApiRouter;
 	private cacheManager: PopularHighlightsCacheManager;
 
-	constructor(fileManager: FileManager, apiManager: ApiRouter, vault: Vault) {
+	constructor(fileManager: FileManager, apiManager: ApiRouter, private vault: Vault, private pluginDir?: string, private pluginVersion?: string) {
 		this.fileManager = fileManager;
 		this.apiManager = apiManager;
 		this.cacheManager = new PopularHighlightsCacheManager(vault);
@@ -73,12 +74,16 @@ export default class SyncNotebooks {
 	async syncNotebooks(
 		force = false,
 		journalDate: string,
-		signal?: { cancelled: boolean }
+		signal?: { cancelled: boolean },
+        publishCatalog?: (books: Metadata[]) => void
 	): Promise<number> {
 		const syncStartTime = new Date().getTime();
-		const metaDataArr = await getBookCatalog(this.apiManager, signal);
-		const filterMetaArr = await this.filterNoteMetas(force, metaDataArr);
-		let syncedNotebooks = 0;
+        const localFiles = await this.fileManager.getNotebookFiles();
+        const index = await SyncIndex.open(this.vault, this.pluginDir, this.pluginVersion, localFiles, force);
+        const metaDataArr = await getBookCatalog(this.apiManager, signal, index);
+        if (!signal?.cancelled) publishCatalog?.(metaDataArr.map(meta => ({ ...meta })));
+        const filterMetaArr = await this.filterNoteMetas(force, metaDataArr, localFiles, index);
+        let syncedNotebooks = 0;
 		let failedNotebooks = 0;
 		const total = filterMetaArr.length;
 		const progressNotice = new Notice('', 0);
@@ -115,7 +120,9 @@ export default class SyncNotebooks {
 					if (signal?.cancelled) break;
 					const savedFilePath = await this.saveNotebook(notebook);
 
-					// Track synced note for the log
+					index?.saved(meta.bookId, savedFilePath ?? meta.file?.file.path);
+
+                    // Track synced note for the log
 					if (savedFilePath) {
 						syncedNotebooks++;
 						syncedNotes.push({
@@ -145,7 +152,8 @@ export default class SyncNotebooks {
 				new Notice(lastError);
 			}
 		}
-		const syncEndTime = new Date().getTime();
+		if (!wasCancelled || total > 0) await index?.persist();
+        const syncEndTime = new Date().getTime();
 		const syncTimeInMilliseconds = syncEndTime - syncStartTime;
 		const syncTimeInSeconds = syncTimeInMilliseconds / 1000;
 
@@ -196,7 +204,9 @@ export default class SyncNotebooks {
 			metaData.totalWords = bookDetail.totalWords;
 			metaData.rating = `${bookDetail.newRating / 10}%`;
 		}
-		const progress: BookProgressResponse = metaData.progressResponse ?? await this.apiManager.getProgress(metaData.bookId);
+		const progress: BookProgressResponse = metaData.progressResponse ?? (metaData.finishReading !== undefined
+            ? await this.apiManager.getReadingProgress(metaData.bookId)
+            : await this.apiManager.getProgress(metaData.bookId));
 		if (!progress?.book) throw new Error(`获取《${metaData.title}》阅读进度失败，已保留本地文件`);
 		if (progress && progress.book) {
 			metaData.readInfo = {
@@ -392,12 +402,14 @@ export default class SyncNotebooks {
 		return Array.from(grouped.values());
 	}
 
-	private async filterNoteMetas(force = false, metaDataArr: Metadata[]): Promise<Metadata[]> {
-		const localFiles: AnnotationFile[] = await this.fileManager.getNotebookFiles();
+	private async filterNoteMetas(force = false, metaDataArr: Metadata[], localFiles: AnnotationFile[], index?: SyncIndex): Promise<Metadata[]> {
 		const duplicateBookSet = this.getDuplicateBooks(metaDataArr);
 		const settingsFilteredMetaArr = this.filterMetasByCurrentSettings(metaDataArr, true);
-		const filterMetaArr: Metadata[] = [];
-		for (const metaData of settingsFilteredMetaArr) {
+		const allowedIds = new Set(settingsFilteredMetaArr.map(meta => meta.bookId));
+        for (const meta of metaDataArr) if (!allowedIds.has(meta.bookId)) index?.excluded(meta.bookId);
+        const filterMetaArr: Metadata[] = [];
+        for (const metaData of settingsFilteredMetaArr) {
+            if (index?.unchanged.has(metaData.bookId)) continue;
 			const localNotebookFile = await this.getLocalNotebookFile(metaData, localFiles, force);
 			if (localNotebookFile && !localNotebookFile.new) {
 				continue;
@@ -430,8 +442,15 @@ export default class SyncNotebooks {
 		});
 	}
 
-	private async getALlMetadata() {
-		return getBookCatalog(this.apiManager);
+	public async getBookshelfCatalog(): Promise<Metadata[]> {
+        const local = await this.fileManager.getNotebookFiles();
+        const index = await SyncIndex.open(this.vault, this.pluginDir, this.pluginVersion, local, false);
+        // A view may consume checkpoints, but must never acknowledge a notebook write.
+        return getBookCatalog(this.apiManager, undefined, index);
+    }
+
+    private async getALlMetadata() {
+        return this.getBookshelfCatalog();
 	}
 
 	private async saveToJounal(journalDate: string, metaDataArr: Metadata[]) {
@@ -479,8 +498,7 @@ export default class SyncNotebooks {
 	): Promise<AnnotationFile> {
 		const localFile = localFiles.find((file) => file.bookId === notebookMeta.bookId) || null;
 		if (localFile) {
-			// Counts alone cannot detect reading progress or edits to existing notes.
-			// Refresh data each run; the writer avoids touching identical output.
+			// The incremental filter already removed verified unchanged books.
 			localFile.new = true;
 			return localFile;
 		}

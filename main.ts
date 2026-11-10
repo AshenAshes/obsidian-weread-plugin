@@ -51,8 +51,8 @@ export default class WereadPlugin extends Plugin {
 		const fileManager = new FileManager(this.app.vault, this.app.metadataCache, this.app);
 		this.fileManager = fileManager;
 		const apiRouter = new ApiRouter();
-		this.syncNotebooks = new SyncNotebooks(fileManager, apiRouter, this.app.vault);
-		this.bookshelfService = new WereadBookshelfService(fileManager, apiRouter);
+		this.syncNotebooks = new SyncNotebooks(fileManager, apiRouter, this.app.vault, this.manifest.dir, this.manifest.version);
+		this.bookshelfService = new WereadBookshelfService(fileManager, apiRouter, () => this.syncNotebooks.getBookshelfCatalog());
 		this.journalService = new WereadJournalService(this, apiRouter);
 		this.favoritesService = new WereadFavoritesService(this, {
 			folder: get(settingsStore).favoritesCanvasFolder,
@@ -300,7 +300,7 @@ export default class WereadPlugin extends Plugin {
 			const syncedCount = await this.syncNotebooks.syncNotebooks(
 				force,
 				window.moment().format('YYYY-MM-DD'),
-				signal
+				signal, this.bookshelfService.catalogPublisher()
 			);
 			// 更新最近同步信息
 			const settings = get(settingsStore);

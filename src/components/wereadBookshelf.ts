@@ -374,11 +374,11 @@ export class WereadBookshelfPanel extends WereadPanel {
 
 			try {
 				const updatedCount = await this.plugin.startSync(force, signal);
-				if ((updatedCount ?? 0) > 0) {
+				if (updatedCount !== undefined && !signal.cancelled) {
 					this.bookshelfService.clearProgressCache();
 					// 等待 Obsidian 的 metadataCache 更新新创建的文件
-					await new Promise(resolve => setTimeout(resolve, 500));
-					await this.loadBookshelf();
+					if (updatedCount > 0) await new Promise(resolve => setTimeout(resolve, 500));
+					await this.loadBookshelf(false);
 				}
 			} finally {
 				// 恢复同步按钮
@@ -431,7 +431,7 @@ export class WereadBookshelfPanel extends WereadPanel {
 		this.contentEl.empty();
 	}
 
-	private async loadBookshelf(): Promise<void> {
+	private async loadBookshelf(refreshRemote = true): Promise<void> {
 		const generation = ++this.loadGeneration;
 		const settings = get(settingsStore);
 		this.sortMode = settings.bookshelfSortMode;
@@ -444,6 +444,7 @@ export class WereadBookshelfPanel extends WereadPanel {
 			this.shelfBooks = initial.books;
 			this.localSnapshot = initial.localOnly;
 			this.renderBooks();
+			if (!refreshRemote) { this.refreshStatusEl.setText(''); return; }
 			const hasLogin = Boolean(settings.wereadApiKey) || (settings.isCookieValid && settings.cookies.length > 0);
 			if (!hasLogin) {
 				this.refreshStatusEl.setText('当前显示本地书籍；配置登录信息后可刷新远端书架。');
