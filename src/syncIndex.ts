@@ -40,7 +40,7 @@ export class SyncIndex {
 	): Promise<SyncIndex | undefined> {
 		const s = get(settingsStore);
 		if (!dir || s.syncScope !== 'reading') return;
-		const key = SHA256(
+		const settingsKey = (newline: string) => SHA256(
 			JSON.stringify([
 				version,
 				s.userVid,
@@ -48,7 +48,11 @@ export class SyncIndex {
 				s.cookies.find((c) => c.name === 'wr_vid')?.value,
 				s.noteLocation,
 				s.activeThemeId,
-				s.themes,
+				s.themes.map((theme) =>
+					theme.isBuiltIn
+						? { ...theme, template: theme.template.replace(/\r?\n/g, newline) }
+						: theme
+				),
 				s.template,
 				s.trimBlocks,
 				s.removeParens,
@@ -63,6 +67,7 @@ export class SyncIndex {
 				s.subFolderType
 			])
 		).toString();
+		const key = settingsKey('\n');
 		const ttl = s.syncPopularHighlightsToggle
 			? (s.popularHighlightsCacheTtl ?? 7) * 86400000
 			: Infinity;
@@ -71,7 +76,9 @@ export class SyncIndex {
 			try {
 				if (await vault.adapter.exists(index.path)) {
 					const data = JSON.parse(await vault.adapter.read(index.path));
-					if (data.key === key) index.previous = new Map(data.books);
+					// Older Windows builds hashed bundled templates with CRLF.
+					if (data.key === key || data.key === settingsKey('\r\n'))
+						index.previous = new Map(data.books);
 				}
 			} catch {
 				/* A missing or corrupt index must not prevent a full sync. */

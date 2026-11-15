@@ -263,7 +263,7 @@ export class WereadBookshelfPanel extends WereadPanel {
 
 		// 根据 Alt/Opt 状态切换按钮外观
 		let isHovering = false;
-		let isAltPressed = false;
+		let previewForce = false;
 		let isSyncing = false;
 		const modKey = Platform.isMacOS ? 'Opt' : 'Alt';
 		const updateSyncButton = (force: boolean) => {
@@ -281,28 +281,28 @@ export class WereadBookshelfPanel extends WereadPanel {
 			}
 		};
 		setTooltip(syncButton, `同步 (按住 ${modKey} 强制同步)`);
-		syncButton.addEventListener('mouseenter', () => {
+		syncButton.addEventListener('mouseenter', (event) => {
 			isHovering = true;
-			updateSyncButton(isAltPressed);
+			previewForce = event.altKey;
+			updateSyncButton(previewForce);
 		});
 		syncButton.addEventListener('mouseleave', () => {
 			isHovering = false;
 			updateSyncButton(false);
 		});
-		// 用 e.code 追踪 Alt 键，比 e.key 在 macOS Electron 下更可靠
-		document.addEventListener('keydown', (e: KeyboardEvent) => {
-			if (e.code === 'AltLeft' || e.code === 'AltRight') {
-				isAltPressed = true;
-				if (isHovering) updateSyncButton(true);
-			}
-		});
-		document.addEventListener('keyup', (e: KeyboardEvent) => {
-			if (e.code === 'AltLeft' || e.code === 'AltRight') {
-				isAltPressed = false;
-				if (isHovering) updateSyncButton(false);
-			}
-		});
-
+		const updateModifierPreview = (event: KeyboardEvent) => {
+			previewForce = isHovering && event.altKey;
+			if (isHovering) updateSyncButton(previewForce);
+		};
+		const ownerDocument = syncButton.ownerDocument;
+		this.registerDomEvent(ownerDocument, 'keydown', updateModifierPreview);
+		this.registerDomEvent(ownerDocument, 'keyup', updateModifierPreview);
+		if (ownerDocument.defaultView) {
+			this.registerDomEvent(ownerDocument.defaultView, 'blur', () => {
+				previewForce = false;
+				updateSyncButton(false);
+			});
+		}
 		const openWebButton = Platform.isDesktopApp
 			? (() => {
 					const btn = toolbarActions.createEl('button', {
@@ -353,9 +353,9 @@ export class WereadBookshelfPanel extends WereadPanel {
 
 
 
-		syncButton.onclick = async () => {
+		syncButton.onclick = async (event) => {
 			if (isSyncing) return;
-			const force = isAltPressed;
+			const force = event.altKey;
 
 			// 同步中：切换为取消按钮
 			isSyncing = true;
@@ -384,7 +384,7 @@ export class WereadBookshelfPanel extends WereadPanel {
 				// 恢复同步按钮
 				isSyncing = false;
 				syncButton.removeEventListener('click', cancelHandler);
-				updateSyncButton(isAltPressed);
+				updateSyncButton(previewForce);
 				if (openWebButton) openWebButton.disabled = false;
 			}
 		};

@@ -583,6 +583,11 @@ test('shelf sync persists checkpoints, selectively fetches changed books, retrie
  }
  assert.deepEqual(await run(),['a,b,c','a,b']);
  assert.deepEqual(await run(),['','']);
+ const builtIn = h.load('src/settings.ts').BUILT_IN_THEMES[0];
+ const originalTemplate = builtIn.template;
+ builtIn.template = originalTemplate.replace(/\r?\n/g, originalTemplate.includes('\r\n') ? '\n' : '\r\n');
+ assert.deepEqual(await run(),['',''], 'switching build platforms should reuse the saved index');
+ builtIn.template = originalTemplate;
  // The post-sync bookshelf refresh and a fresh panel must not acknowledge new changes.
  const reader = new Sync(fm,api,vault,'plugin');
  queried=[]; await reader.getBookshelfCatalog(); assert.deepEqual(queried,[]);
