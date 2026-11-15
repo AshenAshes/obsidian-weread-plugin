@@ -126,6 +126,7 @@ const favorites = {
   }
 };
 const readingOpens = [];
+const sharedNotes = [];
 const externalOpens = [];
 const browserOpens = [];
 let readingOpenFails = false;
@@ -139,6 +140,7 @@ const plugin = {
     canvasOpens.push(args);
   }}},
   favoritesService: favorites,
+  shareJournalNote(note) { sharedNotes.push({...note}); },
   async activateJournalView() {}, async activateBookshelfView() {}, async activateReadingStatsView() {},
   async activateBookDetailView() {},
   async openPreferredReadingView(...args) {
@@ -179,6 +181,109 @@ const cards = (root = document) => [...root.querySelectorAll('article')].map((no
 const results = () => document.querySelector('.weread-journal-day-notes');
 window.smoke = {
   assertions,
+  async importProgress() {
+    const previousState=state, previousFavorites=favoriteState, previousSettings=settingsStore.current();
+    const frame=()=>new Promise(resolve=>requestAnimationFrame(resolve));
+    try {
+      for(const mode of ['today','review']) {
+        settingsStore.set({...settingsStore.current(), journalExcludedBookIds:[], journalIncludeArticles:true});
+        favorites.publish({favorites:[],loaded:true,loading:false,writable:true,pendingIds:[],error:'',warning:''});
+        const anniversary=note('progress-anniversary','a','highlight','Initial anniversary highlight','2025-11-06T03:00:00Z');
+        journal.publish({...previousState,notes:[...baseNotes,anniversary],hasCache:false,syncing:true,scannedBooks:142,totalBooks:565,error:'',failedBooks:0});
+        await mount(mode);
+        const region=()=>view.contentEl.querySelector(mode==='today'?'.weread-journal-today-notes':'.weread-journal-day-notes');
+        const article=()=>region().querySelector('[data-favorite-id="'+baseNotes[0].id+'"]').closest('article');
+        const initialArticle=article();
+        const copy=initialArticle.querySelector('.weread-journal-note-actions button');
+        const star=initialArticle.querySelector('.weread-journal-favorite');
+        const sort=region().querySelector('.weread-journal-sort');
+        const quote=view.contentEl.querySelector('.weread-journal-quote article');
+        const share=quote.querySelector('.weread-journal-share'), shareSvg=share?.querySelector('svg');
+        check(share&&share.classList.contains('clickable-icon')&&region().querySelector('.weread-journal-share'),mode+': shared accessible controls cover quotes and ordinary notes');
+        for(const card of view.contentEl.querySelectorAll('article.weread-journal-note')) {
+          const expected=state.notes.find(note=>note.text===card.querySelector('.weread-journal-note-text').textContent);
+          const control=card.querySelector('.weread-share-button');
+          check(control?.getAttribute('aria-label')==='分享卡片',mode+': each rendered sentence has the common share component');
+          control.click();const snapshot=sharedNotes.at(-1);
+          check(snapshot.id===expected.id&&snapshot.text===expected.text&&snapshot.bookTitle===expected.bookTitle&&snapshot.createTime===expected.createTime&&snapshot.kind===expected.kind,mode+': note/anniversary/thought sharing retains full content and source');
+        }
+        const entryShare=initialArticle.querySelector('.weread-share-button'),entryShareSvg=entryShare.querySelector('svg');
+        const anniversarySort=mode==='review'?view.contentEl.querySelector('.weread-journal-sort[data-sort-scope="anniversary"]'):undefined;
+        const anniversaryCard=mode==='review'?view.contentEl.querySelector('[data-favorite-id="'+anniversary.id+'"]').closest('article'):undefined;
+        const originalSvgs=[copy,star,sort].map(button=>button.querySelector('svg'));
+        const query=mode==='review'?view.contentEl.querySelector('input[type="search"]'):undefined;
+        if(query) query.focus();
+        const assertStable=label=>{
+          check(article()===initialArticle&&copy.isConnected&&star.isConnected&&region().querySelector('.weread-journal-sort')===sort,mode+': '+label+' retains existing note and copy/star/sort controls');
+          check([copy,star,sort].every((button,index)=>button.querySelector('svg')===originalSvgs[index]),mode+': '+label+' retains existing SVG nodes');
+          check(share.isConnected&&share.querySelector('svg')===shareSvg&&entryShare.isConnected&&entryShare.querySelector('svg')===entryShareSvg,mode+': '+label+' retains quote and ordinary-note share icons');
+          check(view.contentEl.querySelector('.weread-journal-quote article')===quote,mode+': '+label+' retains the selected old quote');
+          if(anniversarySort) check(anniversarySort.isConnected&&view.contentEl.querySelector('.weread-journal-sort[data-sort-scope="anniversary"]')===anniversarySort&&anniversaryCard.isConnected, 'Review: '+label+' retains anniversary controls and existing year cards');
+          if(query) check(query.isConnected&&document.activeElement===query,mode+': '+label+' preserves focused search');
+        };
+        for(let i=0;i<12;i++) {
+          journal.publish({...state,notes:state.notes.map(entry=>({...entry})),scannedBooks:143+i});
+          await frame();assertStable('progress-only update '+i);
+        }
+        check(view.contentEl.querySelector('.weread-journal-status').textContent.includes('154/565'),mode+': progress remains live without body replacement');
+        for(let i=0;i<4;i++) {
+          journal.publish({...state,scannedBooks:155+i,notes:[...state.notes,
+            note('import-visible-'+i,'a','highlight','IMPORTED VISIBLE '+i,'2026-11-06T04:00:0'+i+'Z'),
+            note('import-same-'+i,'a','highlight','IMPORTED SAME BOOK '+i,'2026-11-04T04:00:00Z'),
+            note('import-other-'+i,'new-'+i,'highlight','IMPORTED OTHER BOOK '+i,'2026-11-03T04:00:00Z'),
+            note('import-anniversary-'+i,'a','highlight','IMPORTED ANNIVERSARY '+i,'2024-11-06T04:00:00Z')
+          ]});
+          await frame();assertStable('new book result '+i);
+          check(region().textContent.includes('IMPORTED VISIBLE '+i),mode+': new visible notes appear during import');
+          if(mode==='review') {
+            check(view.contentEl.querySelector('.weread-journal-day[data-note-count="'+(3+i)+'"]').getAttribute('aria-label').startsWith('2026-11-06，'), 'Review: heatmap counts update during import');
+            check(view.contentEl.querySelector('.weread-journal-anniversary-year[data-year="2024"]').textContent.includes('IMPORTED ANNIVERSARY '+i), 'Review: new anniversary year groups appear during import');
+          }
+        }
+        journal.publish({...state,notes:state.notes.map(entry=>entry.id===baseNotes[0].id?{...entry,text:'UPDATED IMPORT HIGHLIGHT'}:entry)});
+        await frame();assertStable('same-ID note edit');
+        check(initialArticle.textContent.includes('UPDATED IMPORT HIGHLIGHT'),mode+': existing note text updates without stale cached cards');
+        journal.publish({...state,hasCache:true,syncing:false,updatedAt:NOW});
+        await frame();assertStable('import completion');
+        check(!view.contentEl.querySelector('.weread-journal-refresh').disabled,mode+': completion enables refresh');
+        if(mode==='today') {
+          check(view.contentEl.querySelector('.weread-journal-today-metrics').textContent.includes('5 条'), 'Today: imported highlight counts update');
+          check(!view.contentEl.querySelector('.weread-journal-metric-status'), 'Today: completion removes partial-result explanations');
+        }
+        journal.publish({...state,notes:state.notes.filter(entry=>!entry.id.includes('import-anniversary-')&&!entry.id.includes('import-other-0'))});
+        await frame();assertStable('removed cached notes');
+        if(mode==='review') check(!view.contentEl.querySelector('.weread-journal-anniversary-year[data-year="2024"]'), 'Review: obsolete anniversary year groups disappear incrementally');
+        copy.click();await tick();
+        check(clipboardWrites.at(-1)==='UPDATED IMPORT HIGHLIGHT',mode+': retained copy handler uses the latest note text');
+        entryShare.click();check(sharedNotes.at(-1).text==='UPDATED IMPORT HIGHLIGHT',mode+': retained ordinary-note sharing reads the latest text');
+        favoriteWriteGate=gate();star.click();await tick();
+        check(star.disabled,mode+': retained star reflects pending persistence');
+        journal.publish({...state,notes:state.notes.map(entry=>({...entry})),syncing:true,scannedBooks:160});await frame();
+        check(star.isConnected&&star.disabled&&article()===initialArticle,mode+': import progress preserves the pending favorite control');
+        favoriteWriteGate.resolve();await tick();favoriteWriteGate=undefined;
+        check(star.isConnected&&!star.disabled&&star.getAttribute('aria-pressed')==='true',mode+': retained star completes persistence');
+        check(favoriteState.favorites.find(entry=>entry.id===baseNotes[0].id)?.note.text==='UPDATED IMPORT HIGHLIGHT',mode+': retained star saves the latest note snapshot');
+        const quoteId=quote.querySelector('.weread-journal-favorite').dataset.favoriteId;
+        journal.publish({...state,notes:state.notes.map(entry=>entry.id===quoteId?{...entry,text:'LATEST QUOTE SHARE SNAPSHOT'}:entry)});
+        await frame();assertStable('updated quote share snapshot');share.click();
+        check(sharedNotes.at(-1).id===quoteId&&sharedNotes.at(-1).text==='LATEST QUOTE SHARE SNAPSHOT',mode+': sharing uses the latest selected quote snapshot');
+        Math.random=()=>0.999999;
+        click('换一句');await tick();
+        const shareCalls=sharedNotes.length;share.click();
+        check(sharedNotes.length===shareCalls,mode+': detached old share action cannot share a different quote');
+        check(view.contentEl.querySelector('.weread-journal-quote').textContent.includes('IMPORTED SAME BOOK 3'),mode+': retained quote actions include newly imported same-book candidates');
+        click('换一本');await tick();
+        check(view.contentEl.querySelector('.weread-journal-quote').textContent.includes('IMPORTED OTHER BOOK 3'),mode+': quote actions include newly imported other books');
+        Math.random=()=>0;
+        await view.onClose();view.contentEl.remove();view=undefined;
+      }
+    } finally {
+      favoriteWriteGate?.resolve();favoriteWriteGate=undefined;Math.random=()=>0;
+      if(view){await view.onClose();view.contentEl.remove();view=undefined;}
+      state=previousState;favoriteState=previousFavorites;settingsStore.set(previousSettings);
+    }
+    return assertions.length;
+  },
   async originalNavigation() {
     const previousState = state;
     const located = {...baseNotes[0], sourceUrl: 'weread://bestbookmark?bookId=a&chapterUid=42&rangeStart=10&rangeEnd=28'};
@@ -813,8 +918,9 @@ window.smoke = {
       const quote = () => view.contentEl.querySelector('.weread-journal-quote');
       const quoteId = () => quote().querySelector('.weread-journal-favorite')?.dataset.favoriteId;
       const blacklist = () => quote().querySelector('.weread-journal-blacklist');
-      const toggle = () => quote().querySelector('.weread-journal-article-toggle');
-      check(toggle()?.tagName === 'BUTTON' && toggle().getAttribute('role') === 'switch' && toggle().getAttribute('aria-label') === '旧句重逢包含公众号' && toggle().getAttribute('aria-checked') === 'true', mode + ': compact article switch is accessible and defaults to included for existing settings');
+      const inlineSwitch = root => root.querySelector('.weread-journal-article-toggle, [role="switch"], [aria-label="旧句重逢包含公众号"]');
+      check(!inlineSwitch(quote()) && !quote().textContent.includes('包含公众号'), mode + ': quote header has no duplicate inline article switch');
+      check(settingsStore.current().journalIncludeArticles === undefined, mode + ': opening existing settings does not reset the saved article preference');
       check(blacklist()?.getAttribute('aria-label') === '加入旧句重逢黑名单' && blacklist().textContent.trim() === '' && blacklist().querySelector('svg[data-icon="ban"]'), mode + ': blacklist is an accessible icon-only ban action');
       check(blacklist().title.includes('山间的阅读') && blacklist().title.includes('划线'), mode + ': blacklist tooltip identifies the current book and its highlights');
       const stale = blacklist();
@@ -846,21 +952,21 @@ window.smoke = {
       check(!quoteId() && JSON.stringify(settingsStore.current().journalExcludedBookIds) === JSON.stringify(['a', 'b', 'mp']), mode + ': blacklisting a channel excludes all of its article quotes');
       settingsStore.actions.setJournalExcludedBookIds(['a', 'b']);
       check(quoteId()?.startsWith('mp:'), mode + ': restoring a channel restores article quotes');
-      toggle().click(); await tick();
-      check(toggle().getAttribute('aria-checked') === 'false' && settingsStore.current().journalIncludeArticles === false && !quoteId(), mode + ': disabling articles immediately removes a current channel quote');
+      settingsStore.actions.setJournalIncludeArticles(false); await tick();
+      check(settingsStore.current().journalIncludeArticles === false && !quoteId() && !inlineSwitch(quote()), mode + ': disabling articles in global settings immediately removes a current channel quote');
       check(settingsStore.saved().journalIncludeArticles === false && settingsStore.current().saveArticleToggle === true, mode + ': article preference is persisted independently of article sync');
-      check(journalLoads === loadsBefore && apiCalls === callsBefore && favoriteWrites === writesBefore && JSON.stringify(state.notes) === notesBefore, mode + ': blacklist, restoration and article switch do not reload or mutate journal, call APIs or write favorites');
+      check(journalLoads === loadsBefore && apiCalls === callsBefore && favoriteWrites === writesBefore && JSON.stringify(state.notes) === notesBefore, mode + ': blacklist, restoration and global article setting do not reload or mutate journal, call APIs or write favorites');
       settingsStore.set(settings('account-a'));
       settingsStore.reload(); await mount(mode);
-      check(toggle().getAttribute('aria-checked') === 'false' && !quoteId() && JSON.stringify(settingsStore.current().journalExcludedBookIds) === JSON.stringify(['a', 'b']), mode + ': mocked saved settings retain exclusions and article choice in a newly opened panel');
-      toggle().click(); await tick();
-      check(toggle().getAttribute('aria-checked') === 'true' && quoteId()?.startsWith('mp:'), mode + ': enabling articles restores channel eligibility deterministically');
+      check(settingsStore.current().journalIncludeArticles === false && !inlineSwitch(quote()) && !quoteId() && JSON.stringify(settingsStore.current().journalExcludedBookIds) === JSON.stringify(['a', 'b']), mode + ': mocked saved settings retain exclusions and article choice in a newly opened panel');
+      settingsStore.actions.setJournalIncludeArticles(true); await tick();
+      check(settingsStore.current().journalIncludeArticles === true && quoteId()?.startsWith('mp:'), mode + ': enabling articles in global settings restores channel eligibility deterministically');
       const peer = new WereadJournalView({}, plugin, journal, api, mode === 'today' ? 'review' : 'today');
       await peer.onOpen(); await tick();
       const peerQuote = () => peer.contentEl.querySelector('.weread-journal-quote');
-      const peerToggle = () => peerQuote().querySelector('.weread-journal-article-toggle');
-      peerToggle().click(); await tick();
-      check(toggle().getAttribute('aria-checked') === 'false' && peerToggle().getAttribute('aria-checked') === 'false' && !quoteId() && !peerQuote().querySelector('article'), mode + ': Today and Review switches and current quotes update together');
+      check(peerQuote().querySelector('article'), mode + ': peer panel opens with the saved included article policy');
+      settingsStore.actions.setJournalIncludeArticles(false); await tick();
+      check(!inlineSwitch(quote()) && !inlineSwitch(peerQuote()) && !quoteId() && !peerQuote().querySelector('article'), mode + ': global article setting updates Today and Review current quotes together without inline switches');
       await peer.onClose(); peer.contentEl.remove();
       settingsStore.actions.setJournalExcludedBookIds([]);
       for (let i = 0; i < 8; i++) {
@@ -878,9 +984,10 @@ window.smoke = {
         check(resultHtml.includes('ARTICLE SENTINEL'), 'Review: disabled article quotes remain searchable in the full cached journal');
       }
       const preservedResults = view.contentEl.querySelector(mode === 'review' ? '.weread-journal-day-notes' : '.weread-journal-today-notes');
-      toggle().click(); toggle().click();
-      check(preservedResults.isConnected && (mode !== 'today' || retained === preservedResults), mode + ': switch changes replace only the quote and retain ordinary note DOM');
-      if (mode === 'review') check(search.isConnected && document.activeElement === search && search.value === 'ARTICLE SENTINEL' && preservedResults.innerHTML === resultHtml && view.contentEl.querySelector('.weread-journal-calendar').innerHTML === calendarHtml, 'Review: article switch preserves focused search, complete article results and calendar counts');
+      settingsStore.actions.setJournalIncludeArticles(true);
+      settingsStore.actions.setJournalIncludeArticles(false);
+      check(preservedResults.isConnected && (mode !== 'today' || retained === preservedResults), mode + ': global article setting changes replace only the quote and retain ordinary note DOM');
+      if (mode === 'review') check(search.isConnected && document.activeElement === search && search.value === 'ARTICLE SENTINEL' && preservedResults.innerHTML === resultHtml && view.contentEl.querySelector('.weread-journal-calendar').innerHTML === calendarHtml, 'Review: global article setting preserves focused search, complete article results and calendar counts');
       check(JSON.stringify(state.notes) === notesBefore && JSON.stringify(favoriteState) === favoritesBefore && favoriteWrites === writesBefore, mode + ': quote controls never mutate cached notes or favorites');
       // The peer and new panel openings legitimately load once; setting actions and shuffles do not.
       const loadsAfterMounts = journalLoads, callsAfterMounts = apiCalls;
@@ -928,10 +1035,10 @@ window.smoke = {
     settingsStore.actions.setJournalExcludedBookIds(['a']);
     check(document.querySelector('.weread-journal-day-list') === list && list.scrollTop === before, 'Quote exclusion updates preserve inner scroll');
     settingsStore.actions.setJournalExcludedBookIds([]);
-    const articleToggle = () => document.querySelector('.weread-journal-article-toggle');
-    articleToggle().click();
-    check(document.querySelector('.weread-journal-day-list') === list && list.scrollTop === before && document.activeElement === list, 'Article switch preserves Review list DOM, inner scroll and focused region');
-    articleToggle().click();
+    check(!document.querySelector('.weread-journal-article-toggle'), 'Review has no inline article switch');
+    settingsStore.actions.setJournalIncludeArticles(false);
+    check(document.querySelector('.weread-journal-day-list') === list && list.scrollTop === before && document.activeElement === list, 'Global article setting preserves Review list DOM, inner scroll and focused region');
+    settingsStore.actions.setJournalIncludeArticles(true);
     check(document.querySelector('.weread-journal-day-list') === list && list.scrollTop === before && document.activeElement === list, 'Re-enabling articles preserves the same focused Review reading position');
     const activateDetail = plugin.activateBookDetailView;
     plugin.activateBookDetailView = async () => { view.contentEl.hidden = true; };
@@ -1216,6 +1323,9 @@ test(
 			}
 		}
 		await evaluate('smoke.iconCleanup()');
+		t.diagnostic(
+			`${await evaluate('smoke.importProgress()')} cumulative assertions after incremental import regression`
+		);
 		await evaluate('document.body.className = ""');
 		await send('Emulation.setDeviceMetricsOverride', {
 			width: 1180,

@@ -27,6 +27,8 @@ import { setOriginalReadingIcon } from '../utils/readingActionIcon';
 import { formatNoteTimestamp } from '../utils/noteTime';
 import { WereadPanel } from './wereadPanel';
 import { FavoritesUndoToast } from './wereadFavorites';
+import { createQuoteShareButton } from './quoteShareButton';
+import type { QuoteShareContent } from '../quoteShareCard';
 
 const HIGHLIGHT_COLORS: Record<number, { name: string; label: string }> = {
 	1: { name: 'yellow', label: '黄色' },
@@ -568,6 +570,7 @@ export class WereadBookDetailPanel extends WereadPanel {
 				if (!personal && h.totalCount) meta.createSpan({ text: `${h.totalCount} 人划线` });
 				const actions = meta.createDiv({ cls: 'weread-detail-entry-actions' });
 				this.sourceAndCopy(actions, h.chapterUid, h.range, chapter, h.markText || '', personal ? this.bookId : this.communitySource?.bookId ?? this.bookId);
+				this.shareButton(actions, h.markText || '', chapter, h.createTime, !personal);
 				if (personal) this.favoriteButton(actions, h);
 			}
 		}
@@ -597,6 +600,12 @@ export class WereadBookDetailPanel extends WereadPanel {
 				meta.createSpan({ text: formatNoteTimestamp(Number(r.createTime) * 1000) });
 			const actions = meta.createDiv({ cls: 'weread-detail-entry-actions' });
 			this.sourceAndCopy(actions, r?.chapterUid, r?.range, chapter, r?.content || '');
+			this.shareButton(
+				actions,
+				[r?.abstract, r?.content].filter(Boolean).join('\n\n'),
+				chapter,
+				r?.createTime
+			);
 			if (this.localFilePath) this.button(actions, '本地笔记', () => void this.openLocal());
 		}
 	}
@@ -623,12 +632,55 @@ export class WereadBookDetailPanel extends WereadPanel {
 				});
 				if (r.title) card.createEl('h3', { text: r.title });
 				card.createEl('p', { text: r.content || '', cls: 'weread-detail-note-text' });
-				if (r.content) {
+				const text = [r.title, r.content].filter(Boolean).join('\n\n');
+				if (text.trim()) {
 					const actions = card.createDiv({ cls: 'weread-detail-entry-actions' });
-					this.copyButton(actions, r.content);
+					if (r.content) this.copyButton(actions, r.content);
+					this.shareButton(
+						actions,
+						text,
+						label === '我的书评'
+							? '我的书评'
+							: `社区书评 · ${r.author?.name || '读者'}`,
+						r.createTime,
+						label !== '我的书评'
+					);
 				}
 			}
 		}
+	}
+	private shareButton(
+		parent: HTMLElement,
+		text: string,
+		chapterTitle: string,
+		seconds?: number,
+		community = false
+	): void {
+		if (!text.trim()) return;
+		const bookId = this.bookId,
+			generation = this.generation;
+		const source = community ? this.communitySource : undefined;
+		const content: QuoteShareContent = {
+			text,
+			bookTitle: source?.title || this.detail?.title || this.highlightResp?.book?.title || this.bookTitle,
+			author: source?.author || this.detail?.author || this.highlightResp?.book?.author || undefined,
+			cover:
+				source?.cover ||
+				this.detail?.cover ||
+				this.highlightResp?.book?.cover ||
+				this.bookCover ||
+				undefined,
+			chapterTitle: chapterTitle || undefined
+		};
+		const timestamp = Number(seconds) * 1000;
+		if (timestamp > 0 && Number.isFinite(new Date(timestamp).getTime()))
+			content.createTime = timestamp;
+		createQuoteShareButton(parent, {
+			getContent: () => content,
+			onShare: (snapshot) => this.plugin.shareJournalNote(snapshot),
+			isActive: () => this.valid(generation, bookId),
+			cls: 'weread-detail-action weread-detail-note-action'
+		});
 	}
 	private sourceAndCopy(
 		parent: HTMLElement,

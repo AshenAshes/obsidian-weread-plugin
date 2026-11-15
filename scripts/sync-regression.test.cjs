@@ -480,6 +480,7 @@ test('community mapping routes only public content and unlink restores original 
  const targets = [];
  view.body = node;
  view.favoriteButton = () => {};
+ view.shareButton = () => {};
  view.sourceAndCopy = (_node, chapter, range, _title, _text, target) => targets.push([target, chapter, range]);
  view.renderHighlights([{ chapterUid: 3, range: '1-2', markText: '个人原文' }], [], true);
  view.renderHighlights([{ chapterUid: 47, range: '5-9', markText: '社区原文' }], [], false);

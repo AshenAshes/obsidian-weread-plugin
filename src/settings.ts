@@ -6,6 +6,15 @@ import wereadOfficialTemplate from './themes/wereadOfficialTemplate.njk';
 import separatedTemplate from './themes/separatedTemplate.njk';
 import WereadPlugin from '../main';
 import type { SyncLogEntry, Theme, CommunityBook } from './models';
+import type { QuoteShareTemplate } from './quoteShareCard';
+
+function normalizeQuoteShareTemplate(value: unknown): QuoteShareTemplate {
+	return value === 'cover' || value === 'night' ? value : 'paper';
+}
+
+function normalizeQuoteShareUsername(value: unknown): string {
+	return typeof value === 'string' ? value.trim() : '';
+}
 
 export function normalizeJournalExcludedBookIds(value: unknown): string[] {
 	if (!Array.isArray(value)) return [];
@@ -115,6 +124,8 @@ export interface WereadPluginSettings {
 	journalRefreshHours: number;
 	journalExcludedBookIds: string[];
 	journalIncludeArticles: boolean;
+	quoteShareTemplate: QuoteShareTemplate;
+	quoteShareUsername: string;
 	favoritesViewMode: 'cards' | 'list';
 	favoritesCanvasFolder: string;
 	favoritesCanvasLocationVersion: 0 | 1;
@@ -183,6 +194,8 @@ const DEFAULT_SETTINGS: WereadPluginSettings = {
 	journalRefreshHours: 24,
 	journalExcludedBookIds: [],
 	journalIncludeArticles: true,
+	quoteShareTemplate: 'paper',
+	quoteShareUsername: '',
 	favoritesViewMode: 'cards',
 	favoritesCanvasFolder: '',
 	favoritesCanvasLocationVersion: 0,
@@ -205,6 +218,7 @@ const createSettingsStore = () => {
 
 	let _plugin!: WereadPlugin;
 	let persistence: Promise<void> | undefined;
+	let lastSaveOperation: Promise<void> | undefined;
 	let publishingLocation = false;
 	const enqueueSave = (save: () => Promise<void>): Promise<void> => {
 		const operation = persistence ? persistence.then(save, save) : save();
@@ -224,6 +238,8 @@ const createSettingsStore = () => {
 		const { manualSyncMode, ...restData } = data;
 		const settings: WereadPluginSettings = {
 			...restData,
+			quoteShareTemplate: normalizeQuoteShareTemplate(data.quoteShareTemplate),
+			quoteShareUsername: normalizeQuoteShareUsername(data.quoteShareUsername),
 			journalExcludedBookIds: normalizeJournalExcludedBookIds(data.journalExcludedBookIds),
 			journalIncludeArticles: typeof rawData.journalIncludeArticles === 'boolean' ? rawData.journalIncludeArticles : DEFAULT_SETTINGS.journalIncludeArticles,
 			syncMode:
@@ -350,11 +366,12 @@ const createSettingsStore = () => {
 	store.subscribe((settings) => {
 		if (_plugin && !publishingLocation) {
 			const data = { ...settings };
-			void enqueueSave(() => _plugin.saveData({
+			lastSaveOperation = enqueueSave(() => _plugin.saveData({
 				...data,
 				favoritesCanvasFolder: get(store).favoritesCanvasFolder,
 				favoritesCanvasLocationVersion: get(store).favoritesCanvasLocationVersion
-			})).catch(() => console.error('[weread plugin] 设置保存失败'));
+			}));
+			void lastSaveOperation.catch(() => console.error('[weread plugin] 设置保存失败'));
 		}
 	});
 
@@ -843,6 +860,21 @@ const createSettingsStore = () => {
 		}));
 	};
 
+	const setJournalIncludeArticles = (value: boolean) => {
+		store.update((state) => ({ ...state, journalIncludeArticles: value }));
+	};
+
+	const setQuoteShareTemplate = (value: QuoteShareTemplate) => {
+		store.update((state) => ({ ...state, quoteShareTemplate: normalizeQuoteShareTemplate(value) }));
+	};
+
+	const setQuoteShareUsername = (value: string): Promise<void> => {
+		if (!_plugin) return Promise.reject(new Error('分享署名设置尚未加载'));
+		store.update((state) => ({ ...state, quoteShareUsername: normalizeQuoteShareUsername(value) }));
+		// Svelte subscribers run synchronously; return this update's actual save, not the settled queue.
+		return lastSaveOperation!;
+	};
+
 	const setFavoritesViewMode = (mode: 'cards' | 'list') => {
 		store.update((state) => ({ ...state, favoritesViewMode: mode === 'list' ? 'list' : 'cards' }));
 	};
@@ -851,7 +883,9 @@ const createSettingsStore = () => {
 		subscribe: store.subscribe,
 		initialise,
 		actions: {
-			setJournalIncludeArticles: (value: boolean) => store.update(state => ({ ...state, journalIncludeArticles: value })),
+			setJournalIncludeArticles,
+			setQuoteShareTemplate,
+			setQuoteShareUsername,
 			commitFavoritesCanvasLocation, setFavoritesViewMode, setJournalRefreshHours, setJournalExcludedBookIds,
 			setCommunityBook: (sourceId: string, book?: CommunityBook) => {
 				store.update((state) => {
