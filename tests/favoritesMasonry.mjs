@@ -322,7 +322,7 @@ test(
 );
 
 test(
-	'favorites masonry fills the short column and responds to one/three-column resizes',
+	'favorites masonry fills the short column and caps wide layouts at two columns',
 	{ skip: !chromeAvailable },
 	async (t) => {
 		const browser = await mount(t);
@@ -336,7 +336,8 @@ test(
 		await assertOrder(browser);
 		for (const [width, columns] of [
 			[620, 1],
-			[1220, 3],
+			[1220, 2],
+			[1800, 2],
 			[900, 2]
 		]) {
 			await browser.viewport(width);

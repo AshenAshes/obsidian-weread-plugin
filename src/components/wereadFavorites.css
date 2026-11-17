@@ -153,7 +153,10 @@
 	margin-top: 20px;
 }
 .weread-favorites-results.is-cards {
-	grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+	grid-template-columns: repeat(
+		auto-fit,
+		minmax(min(100%, max(340px, calc((100% - 20px) / 2))), 1fr)
+	);
 	align-items: start;
 }
 /* One-pixel tracks let each card use its own height without changing DOM order. */
