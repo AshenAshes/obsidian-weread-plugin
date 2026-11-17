@@ -4,6 +4,13 @@ import { get } from 'svelte/store';
 import type { AnnotationFile } from './models';
 import { settingsStore } from './settings';
 
+// Bump when parser, renderer or frontmatter changes require existing notes to be regenerated.
+// UI-only plugin releases keep the same format version.
+const SYNC_FORMAT_VERSION = 1;
+const LEGACY_INDEX_VERSIONS: Record<number, string[]> = {
+	1: ['3.4.3', '3.5.1']
+};
+
 type Stamp = {
 	revision: string;
 	checked: number;
@@ -34,15 +41,15 @@ export class SyncIndex {
 	static async open(
 		vault: Vault,
 		dir: string | undefined,
-		version: string | undefined,
+		_pluginVersion: string | undefined,
 		files: AnnotationFile[],
 		force: boolean
 	): Promise<SyncIndex | undefined> {
 		const s = get(settingsStore);
 		if (!dir || s.syncScope !== 'reading') return;
-		const settingsKey = (newline: string) => SHA256(
+		const settingsKey = (format: number | string, newline: string) => SHA256(
 			JSON.stringify([
-				version,
+				format,
 				s.userVid,
 				s.wereadApiKey,
 				s.cookies.find((c) => c.name === 'wr_vid')?.value,
@@ -67,7 +74,7 @@ export class SyncIndex {
 				s.subFolderType
 			])
 		).toString();
-		const key = settingsKey('\n');
+		const key = settingsKey(SYNC_FORMAT_VERSION, '\n');
 		const ttl = s.syncPopularHighlightsToggle
 			? (s.popularHighlightsCacheTtl ?? 7) * 86400000
 			: Infinity;
@@ -76,8 +83,15 @@ export class SyncIndex {
 			try {
 				if (await vault.adapter.exists(index.path)) {
 					const data = JSON.parse(await vault.adapter.read(index.path));
-					// Older Windows builds hashed bundled templates with CRLF.
-					if (data.key === key || data.key === settingsKey('\r\n'))
+					// Only migrate releases known to produce this format, including Windows CRLF keys.
+					if (
+						data.key === key ||
+						(LEGACY_INDEX_VERSIONS[SYNC_FORMAT_VERSION] ?? []).some(
+							(version) =>
+								data.key === settingsKey(version, '\n') ||
+								data.key === settingsKey(version, '\r\n')
+						)
+					)
 						index.previous = new Map(data.books);
 				}
 			} catch {

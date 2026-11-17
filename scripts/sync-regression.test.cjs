@@ -559,6 +559,7 @@ test('shelf sync persists checkpoints, selectively fetches changed books, retrie
  const shelf = ['a','b','c'].map(bookId=>({bookId,title:bookId,finishReading:0,readUpdateTime:1}));
  const notes = [{bookId:'a',sort:8,noteCount:2,reviewCount:1}];
  let overview=0, queried=[], details=[], fail, clock=100;
+ let pluginVersion = '3.5.1';
  const files=new Map(), disk=new Map();
  const api={
    getShelf:async()=>{overview++;return {books:shelf};},
@@ -571,7 +572,7 @@ test('shelf sync persists checkpoints, selectively fetches changed books, retrie
  async function run(force=false){
    overview=0;queried=[];details=[];
    // New instance on every run also exercises persistence across plugin reloads.
-   const sync=new Sync(fm,api,vault,'plugin');
+   const sync=new Sync(fm,api,vault,'plugin',pluginVersion);
    sync.convertToNotebook=async m=>{details.push(m.bookId);if(fail===m.bookId)throw Error('transient');return {metaData:m};};
    sync.saveNotebook=async n=>{const id=n.metaData.bookId;
      if(files.has(id))return null;
@@ -584,6 +585,8 @@ test('shelf sync persists checkpoints, selectively fetches changed books, retrie
  }
  assert.deepEqual(await run(),['a,b,c','a,b']);
  assert.deepEqual(await run(),['','']);
+ pluginVersion = '3.5.2';
+ assert.deepEqual(await run(),['',''], 'a UI-only plugin upgrade must preserve sync checkpoints');
  const builtIn = h.load('src/settings.ts').BUILT_IN_THEMES[0];
  const originalTemplate = builtIn.template;
  builtIn.template = originalTemplate.replace(/\r?\n/g, originalTemplate.includes('\r\n') ? '\n' : '\r\n');
@@ -615,4 +618,72 @@ test('shelf sync persists checkpoints, selectively fetches changed books, retrie
  settingsStore.actions.setNoteBlacklist('');
  assert.deepEqual(await run(),['b','a']); // Prior exclusion never acknowledged content sync.
 
+});
+
+test('compatible release indexes migrate without losing output, account or expiry checks', async () => {
+ const h = harness();
+ const { SyncIndex } = h.load('src/syncIndex.ts');
+ const { settingsStore } = h.load('src/settings.ts');
+ const { get } = require('svelte/store');
+ const { SHA256 } = require('crypto-js');
+ settingsStore.actions.setSyncPopularHighlightsToggle(true);
+ const settings = get(settingsStore);
+ // Capture the persisted hash contract used by the released 3.4.3 and 3.5.1 builds.
+ const releasedKey = (version, newline) => SHA256(JSON.stringify([
+  version, settings.userVid, settings.wereadApiKey,
+  settings.cookies.find(cookie => cookie.name === 'wr_vid')?.value,
+  settings.noteLocation, settings.activeThemeId,
+  settings.themes.map(theme => theme.isBuiltIn
+   ? {...theme, template: theme.template.replace(/\r?\n/g, newline)} : theme),
+  settings.template, settings.trimBlocks, settings.removeParens,
+  settings.removeParensWhitelist, settings.convertTags, settings.filterInlineImages,
+  settings.showEmptyChapterTitleToggle, settings.saveReadingInfoToggle,
+  settings.syncPopularHighlightsToggle, settings.popularHighlightsCacheTtl,
+  settings.fileNameType, settings.subFolderType
+ ])).toString();
+ const file = {path:'book.md', stat:{mtime:100}};
+ const files = [{bookId:'book', file}];
+ const stamp = {revision:'remote-revision', checked:Date.now(), included:true, path:file.path, mtime:100};
+ let raw;
+ let writes = 0;
+ const vault = {adapter:{
+  exists:async () => true,
+  read:async () => raw,
+  write:async (_path, value) => {raw = value; writes++;}
+ }};
+ const open = (force = false) => SyncIndex.open(vault, 'plugin', '3.5.2', files, force);
+ const lookup = index => index.lookup('book', stamp.revision);
+ for (const version of ['3.4.3', '3.5.1']) {
+  for (const newline of ['\n', '\r\n']) {
+   raw = JSON.stringify({key:releasedKey(version, newline), books:[['book', stamp]]});
+   const original = raw;
+   const before = writes;
+   const index = await open();
+   assert.equal(lookup(index), true, 'compatible release reuses the checkpoint');
+   assert.equal(raw, original, 'opening and inspecting an index never rewrites it');
+   assert.equal(writes, before);
+   await index.persist();
+   assert.notEqual(JSON.parse(raw).key, JSON.parse(original).key);
+   assert.deepEqual(JSON.parse(raw).books, [['book', stamp]], 'migration keeps the original check time');
+   assert.equal(lookup(await open()), true, 'the stable format key survives reopening');
+  }
+ }
+ const stable = raw;
+ const originalApiKey = settings.wereadApiKey;
+ const originalRemoveParens = settings.removeParens;
+ settingsStore.actions.setWereadApiKey('another-account');
+ assert.equal(lookup(await open()), undefined, 'legacy compatibility cannot cross accounts');
+ settingsStore.actions.setWereadApiKey(originalApiKey);
+ assert.equal(lookup(await open()), true);
+ settingsStore.actions.setRemoveParens(!originalRemoveParens);
+ assert.equal(lookup(await open()), undefined, 'output settings still invalidate checkpoints');
+ settingsStore.actions.setRemoveParens(originalRemoveParens);
+ assert.equal(lookup(await open()), true);
+ assert.equal(lookup(await open(true)), undefined, 'force sync still bypasses the index');
+ const expired = JSON.parse(stable);
+ expired.books[0][1].checked = Date.now() - 8 * 86400000;
+ raw = JSON.stringify(expired);
+ assert.equal(lookup(await open()), undefined, 'popular-content expiry still requires a refresh');
+ raw = JSON.stringify({key:releasedKey(2, '\n'), books:[['book', stamp]]});
+ assert.equal(lookup(await open()), undefined, 'an incompatible output format is never migrated');
 });
