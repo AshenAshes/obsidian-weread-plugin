@@ -382,7 +382,7 @@ export class FavoritesRepository {
 	}
 
 	/** Includes invalid recovery bytes: their presence must never mean a fresh collection. */
-	private async storageSnapshot(): Promise<Map<string, string>> {
+	async storageSnapshot(): Promise<Map<string, string>> {
 		const files = new Map<string, string>();
 		const paths = [
 			this.paths.primary,

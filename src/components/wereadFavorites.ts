@@ -90,8 +90,6 @@ export class WereadFavoritesPanel extends WereadPanel {
 	private limit = 30;
 	private expanded = new Set<string>();
 	private modeButtons = new Map<string, HTMLButtonElement>();
-	private canvasButton: HTMLButtonElement;
-	private openingCanvas = false;
 	private masonryObserver?: ResizeObserver;
 	private masonryFrame: number | null = null;
 	private masonryWindow?: Window;
@@ -147,12 +145,6 @@ export class WereadFavoritesPanel extends WereadPanel {
 				this.render();
 			};
 		}
-		this.canvasButton = actions.createEl('button', {
-			cls: 'clickable-icon weread-favorites-toolbar-icon',
-			attr: { type: 'button', 'aria-label': '在Canvas中打开收藏' }
-		});
-		setIcon(this.canvasButton, 'layout-dashboard');
-		this.canvasButton.onclick = () => void this.openCanvas();
 		this.status = this.contentEl.createDiv({
 			cls: 'weread-favorites-status',
 			attr: { 'aria-live': 'polite' }
@@ -175,36 +167,9 @@ export class WereadFavoritesPanel extends WereadPanel {
 		this.active = false;
 		this.stopMasonry();
 		this.generation += 1;
-		this.openingCanvas = false;
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		this.undo.clear();
-	}
-	private async openCanvas(): Promise<void> {
-		if (
-			this.openingCanvas ||
-			!this.active ||
-			!this.state.loaded ||
-			this.state.loading ||
-			!this.state.writable
-		)
-			return;
-		const generation = this.generation;
-		this.openingCanvas = true;
-		this.render();
-		try {
-			const path = await this.favorites.ensureCanvas();
-			if (!this.active || generation !== this.generation) return;
-			await this.plugin.app.workspace.openLinkText(path, '', true);
-		} catch (error) {
-			if (this.active && generation === this.generation)
-				new Notice(error instanceof Error ? error.message : '打开Canvas失败，请重试');
-		} finally {
-			if (generation === this.generation) {
-				this.openingCanvas = false;
-				if (this.active) this.render();
-			}
-		}
 	}
 	private stopMasonry(): void {
 		this.masonryObserver?.disconnect();
@@ -261,13 +226,6 @@ export class WereadFavoritesPanel extends WereadPanel {
 		setIcon(this.sortButton.createSpan(), this.sortAscending ? 'arrow-up' : 'arrow-down');
 		for (const [mode, button] of this.modeButtons)
 			button.setAttribute('aria-pressed', String(mode === this.mode));
-		this.canvasButton.disabled =
-			this.openingCanvas || !state.loaded || state.loading || !state.writable;
-		this.canvasButton.title = !state.writable
-			? state.error || state.warning || '收藏当前为只读，请重新读取后打开Canvas'
-			: this.openingCanvas
-				? '正在打开Canvas…'
-				: '在新的Canvas标签页中打开收藏；收藏保存在当前笔记库的Canvas，可直接打开整理卡片。';
 		this.status.empty();
 		if (state.loading || !state.loaded)
 			this.status.createEl('p', { text: '正在读取本地收藏…' });

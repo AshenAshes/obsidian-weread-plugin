@@ -128,7 +128,7 @@ export interface WereadPluginSettings {
 	quoteShareUsername: string;
 	favoritesViewMode: 'cards' | 'list';
 	favoritesCanvasFolder: string;
-	favoritesCanvasLocationVersion: 0 | 1;
+	favoritesCanvasLocationVersion: 0 | 1 | 2;
 	bookshelfSortMode: BookshelfSortMode;
 	bookshelfViewMode: BookshelfViewMode;
 	bookshelfShowCoverTitle: boolean;
@@ -375,7 +375,7 @@ const createSettingsStore = () => {
 		}
 	});
 
-	const commitFavoritesCanvasLocation = (folder: string, version: 1): Promise<void> =>
+	const commitFavoritesCanvasLocation = (folder: string, version: 1 | 2): Promise<void> =>
 		enqueueSave(async () => {
 			if (!_plugin) throw new Error('收藏设置尚未加载');
 			const next = { ...get(store), favoritesCanvasFolder: folder, favoritesCanvasLocationVersion: version };

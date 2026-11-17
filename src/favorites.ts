@@ -14,13 +14,15 @@ import {
 } from './favoritesRepository';
 import type { FavoritesDocument } from './favoritesRepository';
 import { resolveFavoriteBookFiles } from './favoriteBookFiles';
+import { loadInternalFavorites } from './favoritesInternalStorage';
 
 export type { FavoriteEntry, FavoritesState } from './models';
 type Listener = (state: FavoritesState) => void;
 export interface FavoritesStorageOptions {
+	internalFolder?: string;
 	folder?: unknown;
 	locationVersion?: number;
-	commitLocation?: (folder: string, version: 1) => Promise<void>;
+	commitLocation?: (folder: string, version: 1 | 2) => Promise<void>;
 }
 
 /** Vault-owned personal snapshots, deliberately independent of authentication and journal caches. */
@@ -50,6 +52,7 @@ export class WereadFavoritesService {
 	private canvasPaths = new Set<string>();
 	private locationVersion: number;
 	private configurationError?: unknown;
+	private legacyFolder = '';
 	private pendingTransfer?: {
 		source: FavoritesRepository;
 		destination: FavoritesRepository;
@@ -63,7 +66,7 @@ export class WereadFavoritesService {
 		const vault = plugin.app.vault;
 		const adapter = vault.adapter;
 		// Vault writes publish changes to open native Canvas views and index newly created files.
-		const wrapped = new Proxy(adapter, {
+		const wrapped = options.internalFolder ? adapter : new Proxy(adapter, {
 			get: (target, key) => {
 				if (key === 'write')
 					return async (path: string, raw: string) => {
@@ -93,16 +96,19 @@ export class WereadFavoritesService {
 		this.locationVersion = options.locationVersion ?? (options.commitLocation ? 0 : 1);
 		let folder = '';
 		try {
-			folder = validateFavoritesCanvasFolder(
+			this.legacyFolder = validateFavoritesCanvasFolder(
 				options.folder === undefined ? '' : options.folder
 			);
+			folder = options.internalFolder
+				? validateFavoritesCanvasFolder(options.internalFolder)
+				: this.legacyFolder;
 		} catch (error) {
 			this.configurationError = error;
 		}
 		this.repository = new FavoritesRepository(wrapped, folder, !options.commitLocation);
 		this.canvasPaths.add(this.repository.paths.primary);
 		this.canvasPaths.add(LEGACY_CANVAS_PATH);
-		if (typeof vault.on === 'function' && typeof vault.offref === 'function') {
+		if (!options.internalFolder && typeof vault.on === 'function' && typeof vault.offref === 'function') {
 			const changed = (file: { path: string }) => {
 				if (
 					file.path !== this.repository.paths.primary ||
@@ -154,6 +160,16 @@ export class WereadFavoritesService {
 
 	private async loadRepository() {
 		if (this.configurationError) throw this.configurationError;
+		if (this.options.internalFolder) {
+			const result = await loadInternalFavorites(
+				this.adapter, this.repository, this.legacyFolder, this.locationVersion === 2
+			);
+			if (this.locationVersion !== 2) {
+				await this.options.commitLocation?.(this.repository.paths.folder, 2);
+				this.locationVersion = 2;
+			}
+			return result;
+		}
 		if (this.locationVersion !== 0) return this.repository.load();
 		if (this.pendingTransfer) {
 			await this.commitTransfer();
