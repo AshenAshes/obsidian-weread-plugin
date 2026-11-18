@@ -209,15 +209,47 @@ test('reviews include every page and reject a failed or non-advancing page', asy
 	h.load('src/settings.ts').settingsStore.actions.setWereadApiKey('test-only');
 	const Api = h.load('src/api-v2.ts').default;
 	h.queue.push(
-		{ reviews: [{ reviewId: 'a' }], hasMore: 1, synckey: 5 },
-		{ reviews: [{ reviewId: 'b' }], hasMore: 0 }
+		{ reviews: [{ reviewId: 'a' }], hasMore: '1', synckey: '5', totalCount: 2 },
+		{ reviews: [{ review: { reviewId: 'a' } }, { reviewId: 'b' }], hasMore: 0, totalCount: 2 }
 	);
 	assert.equal((await new Api().getNotebookReviews('123')).reviews.length, 2);
-	assert.equal(h.requests.at(-1).synckey, 5);
+	assert.deepEqual(h.requests.map((request) => request.synckey), [0, 5]);
+	assert.ok(h.requests.every((request) => !Object.hasOwn(request, 'count')));
 	h.queue.push({ reviews: [], hasMore: 1, synckey: 0 });
 	await assert.rejects(() => new Api().getNotebookReviews('123'));
 	h.queue.push({ reviews: [], hasMore: 1, synckey: 1 }, { errcode: -1 });
 	await assert.rejects(() => new Api().getNotebookReviews('123'));
+});
+
+test('reviews accept more than 100 items and reject an incomplete result before sync', async () => {
+	const h = harness();
+	h.load('src/settings.ts').settingsStore.actions.setWereadApiKey('test-only');
+	const Api = h.load('src/api-v2.ts').default;
+	const api = new Api();
+	const reviews = Array.from({ length: 120 }, (_, i) => ({ review: { reviewId: String(i) } }));
+	h.queue.push({ reviews, totalCount: 120, hasMore: 0 });
+	assert.equal((await api.getNotebookReviews('123')).reviews.length, 120);
+	assert.equal(Object.hasOwn(h.requests[0], 'count'), false);
+
+	h.queue.push({ reviews: reviews.slice(0, 100), totalCount: 120, hasMore: 0 });
+	await assert.rejects(() => api.getNotebookReviews('123'), /书评获取不完整/);
+
+	h.queue.push({ reviews: [...reviews.slice(0, 119), reviews[0]], totalCount: 120, hasMore: 0 });
+	await assert.rejects(() => api.getNotebookReviews('123'), /书评获取不完整/);
+});
+
+test('both gateway paths use WeRead Skill 1.0.6', async () => {
+	const h = harness();
+	h.load('src/settings.ts').settingsStore.actions.setWereadApiKey('test-only');
+	const ApiV2 = h.load('src/api-v2.ts').default;
+	const Api = h.load('src/api.ts').default;
+	h.queue.push({ books: [] }, { readTimes: {} });
+	await new ApiV2().getShelf();
+	await new Api().getReadingStats('monthly');
+	assert.deepEqual(h.requests, [
+		{ api_name: '/shelf/sync', skill_version: '1.0.6' },
+		{ api_name: '/readdata/detail', skill_version: '1.0.6', mode: 'monthly' }
+	]);
 });
 
 test('empty YAML is accepted; malformed YAML boundaries are rejected', () => {
@@ -502,6 +534,7 @@ test('community search accepts scope 17 response groups and deduplicates book ID
  assert.equal(books[0].bookId, '123');
  assert.equal(h.requests[0].scope, 10);
  assert.equal(h.requests[0].keyword, '书城版');
+ assert.equal(h.requests[0].skill_version, '1.0.6');
 });
 
 

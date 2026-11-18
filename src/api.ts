@@ -13,6 +13,7 @@ import {
 } from './models';
 import type { ReadingStatsResponse, ReadingStatsMode } from './models';
 import CookieCloudManager from './cookieCloud';
+import { WEREAD_SKILL_VERSION } from './wereadProtocol';
 export default class ApiManager {
 	readonly baseUrl: string = 'https://weread.qq.com';
 
@@ -447,9 +448,9 @@ export default class ApiManager {
 		}
 		try {
 			const body = {
+				...params,
 				api_name: apiName,
-				skill_version: '1.0.3',
-				...params
+				skill_version: WEREAD_SKILL_VERSION
 			};
 			const req: RequestUrlParam = {
 				url: 'https://i.weread.qq.com/api/agent/gateway',

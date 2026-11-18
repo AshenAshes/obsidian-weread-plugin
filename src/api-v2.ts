@@ -2,6 +2,7 @@ import { requestUrl, RequestUrlParam } from 'obsidian';
 import { settingsStore } from './settings';
 import { get } from 'svelte/store';
 import type { BookProgressResponse, BookReviewResponse } from './models';
+import { WEREAD_SKILL_VERSION } from './wereadProtocol';
 
 export type ShelfBook = {
 	bookId: string;
@@ -34,9 +35,9 @@ class ApiV2Manager {
 				'Authorization': `Bearer ${settings.wereadApiKey}`
 			},
 			body: JSON.stringify({
+				...params,
 				api_name: apiName,
-				skill_version: '1.0.5',
-				...params
+				skill_version: WEREAD_SKILL_VERSION
 			})
 		};
 
@@ -114,17 +115,28 @@ class ApiV2Manager {
 	}
 
 	async getNotebookReviews(bookId: string) {
-		const reviews: BookReviewResponse['reviews'] = [];
+		const reviews = new Map<string, BookReviewResponse['reviews'][number]>();
 		const cursors = new Set<number>([0]);
 		let synckey = 0;
 		while (true) {
+			// Setting count can truncate the result without returning another page.
 			const page = await this.callAgent<BookReviewResponse>('/review/list/mine', {
-				bookid: bookId, synckey, count: 100
+				bookid: bookId,
+				synckey
 			});
 			if (!Array.isArray(page?.reviews)) throw new Error('书评获取失败，已保留本地内容');
-			reviews.push(...page.reviews);
-			if (page.hasMore !== 1) return { ...page, reviews, hasMore: 0 };
-			synckey = page.synckey;
+			for (const item of page.reviews) {
+				const id = item?.review?.reviewId ?? item?.reviewId;
+				if (id == null || id === '') throw new Error('书评缺少唯一标识，已保留本地内容');
+				reviews.set(String(id), item);
+			}
+			if (Number(page.hasMore) !== 1) {
+				if (Number(page.totalCount) > reviews.size) {
+					throw new Error('书评获取不完整，已保留本地内容');
+				}
+				return { ...page, reviews: Array.from(reviews.values()), hasMore: 0 };
+			}
+			synckey = page.synckey == null ? NaN : Number(page.synckey);
 			if (!Number.isFinite(synckey) || cursors.has(synckey)) {
 				throw new Error('书评分页不完整，已保留本地内容');
 			}

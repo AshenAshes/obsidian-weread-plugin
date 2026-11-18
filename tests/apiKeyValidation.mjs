@@ -43,7 +43,10 @@ function fixture(response, apiKey = 'synthetic-key') {
 		'./settings': { settingsStore: settings },
 		'svelte/store': { get: (store) => store.value }
 	};
-	const V2 = load('src/api-v2.ts', common);
+	const V2 = load('src/api-v2.ts', {
+		...common,
+		'./wereadProtocol': load('src/wereadProtocol.ts', {})
+	});
 	const Router = load('src/api-router.ts', {
 		...common,
 		'./api-v2': V2,
@@ -94,7 +97,7 @@ test('successful objects retain the existing absent or numeric zero errcode sema
 		assert.equal(f.calls[0].headers.Authorization, 'Bearer synthetic-key');
 		assert.deepEqual(JSON.parse(f.calls[0].body), {
 			api_name: '/_list',
-			skill_version: '1.0.5'
+			skill_version: '1.0.6'
 		});
 	}
 });
@@ -112,9 +115,9 @@ test('direct V2 validation without an API key is false and makes no request', as
 });
 
 test('an upgrade response alone cannot validate a configured key', async () => {
- const f = fixture({ upgrade_info: { latest_version: '1.0.6' } });
- assert.deepEqual(await f.router.validateApiKey(), { valid: false });
- assert.equal(f.cookieCalls(), 0);
+	const f = fixture({ upgrade_info: { latest_version: '1.0.7' } });
+	assert.deepEqual(await f.router.validateApiKey(), { valid: false });
+	assert.equal(f.cookieCalls(), 0);
 });
 
 test('configured API key failures cannot be hidden by a valid Cookie', async () => {

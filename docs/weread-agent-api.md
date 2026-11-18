@@ -75,12 +75,12 @@ V1（Cookie 认证）和 V2（Agent Gateway — Bearer Token）接口对照表�
 curl -X POST "https://i.weread.qq.com/api/agent/gateway" \
   -H "Authorization: Bearer wrk-xxxxxxxx" \
   -H "Content-Type: application/json" \
-  -d '{"api_name": "/store/search", "keyword": "三体", "skill_version": "1.0.3"}'
+  -d '{"api_name": "/store/search", "keyword": "三体", "skill_version": "1.0.6"}'
 ```
 
 ### 通用规则
 
-- 每次请求必须带 `skill_version`（当前为 `"1.0.3"`）
+- 每次请求必须带 `skill_version`（当前为 `"1.0.6"`）
 - 所有业务参数**平铺在 body 顶层**，不要嵌套在 `params`/`data` 等对象内
 - 时间戳字段单位均为 Unix 秒，阅读时长字段单位均为秒
 - `errcode` 非 0 时表示错误
@@ -497,7 +497,9 @@ curl -X POST "https://i.weread.qq.com/api/agent/gateway" \
 |------|------|------|------|
 | `bookid` | string | ✅ | 书籍 ID（注意是小写 `bookid`） |
 | `synckey` | int | — | 翻页游标，默认 0 |
-| `count` | int | — | 每页数量，默认 20 |
+| `count` | int | — | 限制返回条数，完整同步时省略 |
+
+传入 `count` 时，服务端可能截断 `reviews` 却返回 `hasMore: 0`。完整同步时使用 `totalCount` 检查去重后的想法条数。
 
 **响应示例**
 
@@ -635,7 +637,7 @@ curl -X POST "https://i.weread.qq.com/api/agent/gateway" \
   "bookId": "695233",
   "chapterUid": 94,
   "reviews": [{"range": "389-528", "count": 2}],
-  "skill_version": "1.0.3"
+  "skill_version": "1.0.6"
 }
 ```
 
@@ -805,13 +807,13 @@ curl -X POST "https://i.weread.qq.com/api/agent/gateway" \
 
 ```json
 // 查询 2025 年全年
-{"api_name": "/readdata/detail", "mode": "annually", "baseTime": 1735689600, "skill_version": "1.0.3"}
+{"api_name": "/readdata/detail", "mode": "annually", "baseTime": 1735689600, "skill_version": "1.0.6"}
 
 // 查询 2024 年 3 月
-{"api_name": "/readdata/detail", "mode": "monthly", "baseTime": 1709222400, "skill_version": "1.0.3"}
+{"api_name": "/readdata/detail", "mode": "monthly", "baseTime": 1709222400, "skill_version": "1.0.6"}
 
 // 查询全部历史
-{"api_name": "/readdata/detail", "mode": "overall", "skill_version": "1.0.3"}
+{"api_name": "/readdata/detail", "mode": "overall", "skill_version": "1.0.6"}
 ```
 
 ---
