@@ -450,11 +450,15 @@ test('partial failures preserve cached book, persist incomplete marker and retry
 	await service.load(true);
 	const failed = await settled(service);
 	assert.equal(failed.failedBooks, 1);
+	assert.deepEqual(failed.failures, [{
+		bookId: 'one', title: 'Book one', reason: '划线数量不足（1/2）；想法分页未取完'
+	}]);
 	assert.equal(failed.updatedAt, original.updatedAt);
 	assert.equal(failed.notes.find((note) => note.id === 'one:highlight:one-h').text, 'Highlight');
 	assert.equal(failed.notes.filter((note) => note.bookId === 'two').length, 2);
 	const record = JSON.parse([...files].find(([path]) => path.endsWith('.json'))[1]);
 	assert.equal(record.books.find((entry) => entry.bookId === 'one').complete, false);
+	assert.deepEqual(record.books.find((entry) => entry.bookId === 'one').failure, failed.failures[0]);
 	api.getNotebookHighlights = async (id) => {
 		counts.highlights++;
 		const result = highlight(id, 'Recovered');
@@ -469,6 +473,7 @@ test('partial failures preserve cached book, persist incomplete marker and retry
 	await service.load(true);
 	const recovered = await settled(service);
 	assert.equal(recovered.failedBooks, 0);
+	assert.deepEqual(recovered.failures, []);
 	assert.equal(counts.highlights, calls + 1);
 	assert.equal(
 		recovered.notes.find((note) => note.id === 'one:highlight:one-h').text,
@@ -495,6 +500,34 @@ test('changed sort with unchanged counts fetches details; deleted and zero-count
 	const empty = await settled(service);
 	assert.equal(empty.totalBooks, 0);
 	assert.equal(empty.hasCache, true);
+});
+
+test('same-count edits invalidate the journal when only updatedAt changes', async (t) => {
+	const { service, api } = fixture(t);
+	api.getNotebooksWithRetry = async () => [book('one', { updatedAt: 1700000100 })];
+	await service.load();
+	await settled(service);
+	api.getNotebooksWithRetry = async () => [book('one', { updatedAt: 1700000101 })];
+	api.getNotebookReviews = async () => reviews('one', 'Edited thought');
+	await service.load(true);
+	const refreshed = await settled(service);
+	assert.equal(refreshed.notes.find((note) => note.kind === 'thought').text, 'Edited thought');
+});
+
+test('a quick journal scan publishes notes once after collecting all books', async (t) => {
+	const originalNow = Date.now;
+	Date.now = () => 1700000000000;
+	t.after(() => { Date.now = originalNow; });
+	const { service, api } = fixture(t);
+	api.getNotebooksWithRetry = async () => Array.from({ length: 120 }, (_, i) => book(String(i)));
+	const snapshots = [];
+	service.subscribe((state) => snapshots.push(state));
+	await service.load();
+	const refreshed = await settled(service);
+	assert.equal(refreshed.notes.length, 240);
+	assert.equal(refreshed.scannedBooks, 120);
+	assert(snapshots.filter((state) => state.syncing).length <= 2);
+	assert(snapshots.filter((state) => state.syncing).every((state) => state.notes.length === 0));
 });
 
 test('first-load partial results retain successful content and are never considered complete', async (t) => {

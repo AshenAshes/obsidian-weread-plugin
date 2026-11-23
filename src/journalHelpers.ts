@@ -20,6 +20,7 @@ export interface JournalRevision {
 	reviewCount: number;
 	bookmarkCount?: number;
 	sort?: number;
+	updatedAt?: number;
 }
 
 export const journalObject = (value: unknown): JournalObject =>
@@ -58,7 +59,8 @@ export function journalRevision(book: JournalObject): JournalRevision | undefine
 		noteCount: book.noteCount,
 		reviewCount: book.reviewCount,
 		...(count(book.bookmarkCount) ? { bookmarkCount: book.bookmarkCount } : {}),
-		...(count(book.sort) && book.sort > 0 ? { sort: book.sort } : {})
+		...(count(book.sort) && book.sort > 0 ? { sort: book.sort } : {}),
+		...(count(book.updatedAt) && book.updatedAt > 0 ? { updatedAt: book.updatedAt } : {})
 	};
 }
 
@@ -72,7 +74,8 @@ export function sameJournalRevision(
 		left.noteCount === right.noteCount &&
 		left.reviewCount === right.reviewCount &&
 		left.bookmarkCount === right.bookmarkCount &&
-		left.sort === right.sort
+		left.sort === right.sort &&
+		left.updatedAt === right.updatedAt
 	);
 }
 
@@ -199,17 +202,20 @@ export function sortJournalNotes(notes: JournalNote[]): JournalNote[] {
 	return notes.sort((a, b) => b.createTime - a.createTime || a.id.localeCompare(b.id));
 }
 
-/** Existing router methods can return undefined or a truncated first review page. */
-export function journalSourceComplete(
+export function journalSourceFailureReason(
 	response: unknown,
 	kind: 'highlight' | 'thought',
 	expected?: number
-): boolean {
+): string {
+	const label = kind === 'highlight' ? '划线' : '想法';
+	if (response == null) return `${label}请求失败`;
 	const root = journalObject(response);
-	if (root.errcode !== undefined && root.errcode !== 0) return false;
-	if (root.hasMore === true || root.hasMore === 1 || root.hasMore === '1') return false;
+	if (root.errcode !== undefined && root.errcode !== 0) return `${label}接口返回错误`;
+	if (root.hasMore === true || root.hasMore === 1 || root.hasMore === '1') {
+		return `${label}分页未取完`;
+	}
 	const items = kind === 'highlight' ? root.updated : root.reviews;
-	if (!Array.isArray(items)) return false;
+	if (!Array.isArray(items)) return `${label}数据缺失`;
 	const ids = new Set<string>();
 	for (const value of items) {
 		const wrapper = journalObject(value);
@@ -218,14 +224,22 @@ export function journalSourceComplete(
 		const id = journalId(
 			kind === 'highlight' ? item.bookmarkId : (item.reviewId ?? wrapper.reviewId)
 		);
-		if (!id) return false;
+		if (!id) return `${label}缺少唯一标识`;
 		ids.add(id);
 	}
 	const total = root.totalCount;
-	return (
-		(expected === undefined || ids.size >= expected) &&
-		(typeof total !== 'number' || ids.size >= total)
-	);
+	if (typeof total === 'number' && !Number.isFinite(total)) return `${label}总数无效`;
+	const required = Math.max(expected ?? 0, typeof total === 'number' ? total : 0);
+	return ids.size >= required ? '' : `${label}数量不足（${ids.size}/${required}）`;
+}
+
+/** Existing router methods can return undefined or a truncated first review page. */
+export function journalSourceComplete(
+	response: unknown,
+	kind: 'highlight' | 'thought',
+	expected?: number
+): boolean {
+	return journalSourceFailureReason(response, kind, expected) === '';
 }
 
 export function validJournalNote(value: unknown, bookId: string): value is JournalNote {

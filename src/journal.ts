@@ -9,7 +9,7 @@ import {
 	journalMetadata,
 	journalObject,
 	journalRevision,
-	journalSourceComplete,
+	journalSourceFailureReason,
 	parseJournalNotes,
 	sameJournalRevision,
 	sortJournalNotes,
@@ -19,11 +19,19 @@ import type { JournalNote, JournalObject, JournalRevision } from './journalHelpe
 
 export type { JournalNote } from './journalHelpers';
 
+interface JournalFailure {
+	bookId: string;
+	title: string;
+	reason: string;
+}
+
 export interface JournalState {
 	notes: JournalNote[];
 	totalBooks: number;
 	scannedBooks: number;
 	failedBooks: number;
+	failures: JournalFailure[];
+	lastDurationMs: number;
 	updatedAt: number;
 	syncing: boolean;
 	error: string;
@@ -35,6 +43,7 @@ interface CachedBook {
 	revision?: JournalRevision;
 	notes: JournalNote[];
 	complete: boolean;
+	failure?: JournalFailure;
 }
 interface JournalRecord {
 	version: 1;
@@ -43,11 +52,23 @@ interface JournalRecord {
 }
 type Listener = (state: JournalState) => void;
 const RETRY_MS = 5 * 60 * 1000;
+const PROGRESS_INTERVAL_MS = 150;
+
+function getJournalFailure(book: CachedBook): JournalFailure {
+	return book.failure ?? {
+		bookId: book.bookId,
+		title: book.notes[0]?.bookTitle || book.bookId,
+		reason: '笔记未完整获取'
+	};
+}
+
 const emptyState = (): JournalState => ({
 	notes: [],
 	totalBooks: 0,
 	scannedBooks: 0,
 	failedBooks: 0,
+	failures: [],
+	lastDurationMs: 0,
 	updatedAt: 0,
 	syncing: false,
 	error: '',
@@ -102,7 +123,11 @@ export class WereadJournalService {
 
 	getSnapshot(): JournalState {
 		// Callers cannot mutate the service cache through a returned DTO.
-		return { ...this.state, notes: this.state.notes.map((note) => ({ ...note })) };
+		return {
+			...this.state,
+			notes: this.state.notes.map((note) => ({ ...note })),
+			failures: this.state.failures.map((failure) => ({ ...failure }))
+		};
 	}
 
 	subscribe(listener: Listener): () => void {
@@ -159,6 +184,7 @@ export class WereadJournalService {
 				syncing: true,
 				scannedBooks: 0,
 				failedBooks: 0,
+				failures: [],
 				error: ''
 			};
 			// Assign before notifying or invoking a producer: listeners may call load().
@@ -233,24 +259,30 @@ export class WereadJournalService {
 					!book.notes.every((note) => validJournalNote(note, book.bookId as string))
 				)
 					return;
+				const { title, reason } = journalObject(book.failure);
 				books.set(book.bookId, {
 					bookId: book.bookId,
 					complete: book.complete,
 					notes: book.notes as JournalNote[],
-					revision: journalRevision(journalObject(book.revision))
+					revision: journalRevision(journalObject(book.revision)),
+					...(typeof title === 'string' && typeof reason === 'string'
+						? { failure: { bookId: book.bookId, title, reason } }
+						: {})
 				});
 			}
 			if (!this.current(generation)) return;
 			this.books = books;
-			const failedBooks = [...books.values()].filter((book) => !book.complete).length;
+			const failures = [...books.values()].filter((book) => !book.complete).map(getJournalFailure);
 			this.state = {
 				notes: sortJournalNotes([...books.values()].flatMap((book) => book.notes)),
 				totalBooks: books.size,
 				scannedBooks: books.size,
-				failedBooks,
+				failedBooks: failures.length,
+				failures,
+				lastDurationMs: 0,
 				updatedAt: raw.updatedAt,
 				syncing: false,
-				error: failedBooks ? `${failedBooks} 本书的笔记未完整同步，请稍后重试` : '',
+				error: failures.length ? `${failures.length} 本书的笔记未完整同步，请稍后重试` : '',
 				hasCache: true
 			};
 			this.emit();
@@ -267,6 +299,7 @@ export class WereadJournalService {
 		identity: string,
 		previous: JournalState
 	): Promise<void> {
+		const startedAt = Date.now();
 		try {
 			if (!this.current(generation)) return;
 			const response: unknown = await this.api.getNotebooksWithRetry();
@@ -275,8 +308,9 @@ export class WereadJournalService {
 			const books = journalBooks(response);
 			const next = new Map<string, CachedBook>();
 			let scannedBooks = 0;
-			let failedBooks = 0;
+			const failures: JournalFailure[] = [];
 			let index = 0;
+			let lastProgressAt = startedAt;
 			this.state = { ...this.state, totalBooks: books.length };
 			this.emit();
 			// Two book workers, at most four detail requests at a time.
@@ -301,20 +335,14 @@ export class WereadJournalService {
 						if (!this.current(generation)) return;
 						next.set(bookId, entry);
 						scannedBooks += 1;
-						if (!entry.complete) failedBooks += 1;
-						this.state = {
-							...this.state,
-							// Keep old books visible until all current book identities are known.
-							notes: sortJournalNotes([
-								...[...this.books.values()]
-									.filter((cached) => !next.has(cached.bookId))
-									.flatMap((cached) => cached.notes),
-								...[...next.values()].flatMap((cached) => cached.notes)
-							]),
-							scannedBooks,
-							failedBooks
-						};
-						this.emit();
+						if (!entry.complete) failures.push(getJournalFailure(entry));
+						const now = Date.now();
+						if (now - lastProgressAt >= PROGRESS_INTERVAL_MS && scannedBooks < books.length) {
+							lastProgressAt = now;
+							// Keep the previous note snapshot visible until the scan finishes.
+							this.state = { ...this.state, scannedBooks, failedBooks: failures.length };
+							this.emit();
+						}
 					}
 				})
 			);
@@ -324,10 +352,12 @@ export class WereadJournalService {
 				notes: sortJournalNotes([...next.values()].flatMap((book) => book.notes)),
 				totalBooks: books.length,
 				scannedBooks,
-				failedBooks,
-				updatedAt: failedBooks ? previous.updatedAt : Date.now(),
+				failedBooks: failures.length,
+				failures: failures.sort((a, b) => a.title.localeCompare(b.title, 'zh-CN')),
+				lastDurationMs: Date.now() - startedAt,
+				updatedAt: failures.length ? previous.updatedAt : Date.now(),
 				syncing: false,
-				error: failedBooks ? `${failedBooks} 本书的笔记未完整同步，请稍后重试` : '',
+				error: failures.length ? `${failures.length} 本书的笔记未完整同步，请稍后重试` : '',
 				hasCache: true
 			};
 			const record: JournalRecord = {
@@ -361,6 +391,7 @@ export class WereadJournalService {
 			this.state = {
 				...previous,
 				syncing: false,
+				lastDurationMs: Date.now() - startedAt,
 				error: '笔记同步失败，已保留缓存，请稍后重试'
 			};
 			this.emit();
@@ -370,7 +401,8 @@ export class WereadJournalService {
 	private async fetchBook(book: JournalObject, old?: CachedBook): Promise<CachedBook> {
 		const bookId = journalBookId(book);
 		const revision = journalRevision(book);
-		const article = journalMetadata(book).bookType === 3;
+		const metadata = journalMetadata(book);
+		const article = metadata.bookType === 3;
 		const [highlights, reviews] = await Promise.allSettled([
 			book.noteCount === 0
 				? Promise.resolve({ updated: [] })
@@ -381,13 +413,16 @@ export class WereadJournalService {
 		]);
 		const h = highlights.status === 'fulfilled' ? highlights.value : undefined;
 		const r = reviews.status === 'fulfilled' ? reviews.value : undefined;
-		const complete =
-			journalSourceComplete(h, 'highlight', revision?.noteCount) &&
-			journalSourceComplete(r, 'thought', revision?.reviewCount);
+		const reason = [
+			journalSourceFailureReason(h, 'highlight', revision?.noteCount),
+			journalSourceFailureReason(r, 'thought', revision?.reviewCount)
+		].filter(Boolean).join('；');
+		const complete = !reason;
 		return {
 			bookId,
 			revision,
 			complete,
+			...(reason ? { failure: { bookId, title: metadata.bookTitle || bookId, reason } } : {}),
 			notes: !complete && old ? old.notes : parseJournalNotes(book, h, r)
 		};
 	}

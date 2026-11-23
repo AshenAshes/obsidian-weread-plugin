@@ -119,6 +119,8 @@ export class WereadJournalPanel extends WereadPanel {
 	}
 	private body: HTMLElement;
 	private status: HTMLElement;
+	private failureDetails: HTMLDetailsElement;
+	private failureList: HTMLUListElement;
 	private headerDate: HTMLElement;
 	private refreshButton: HTMLButtonElement;
 	private pendingLoads = 0;
@@ -136,6 +138,7 @@ export class WereadJournalPanel extends WereadPanel {
 	private todaySeconds?: number;
 	private statsError = '';
 	private statsLoading = true;
+	private statsRequest?: { date: string; generation: number };
 	private shelfLoading = true;
 	private todayBooks: { bookId: string; title: string; cover?: string; author: string }[] = [];
 	private shelfError = '';
@@ -218,6 +221,11 @@ export class WereadJournalPanel extends WereadPanel {
 				void this.loadTodayBooks();
 			}
 		};
+		this.failureDetails = this.contentEl.createEl('details', {
+			cls: 'weread-journal-failures'
+		});
+		this.failureDetails.createEl('summary', { text: '查看未完整获取的笔记' });
+		this.failureList = this.failureDetails.createEl('ul');
 		this.body = this.contentEl.createDiv({ cls: 'weread-journal-body' });
 		this.favorites = this.plugin.favoritesService;
 		if (this.favorites) {
@@ -292,19 +300,23 @@ export class WereadJournalPanel extends WereadPanel {
 		}
 		this.refreshTimer = window.setInterval(() => {
 			const date = dayKey(new Date());
+			const todayVisible =
+				this.mode === 'today' &&
+				this.contentEl.ownerDocument.visibilityState !== 'hidden' &&
+				!this.contentEl.closest('[hidden]') &&
+				this.contentEl.getClientRects().length > 0;
 			if (date !== this.date) {
 				this.date = date;
 				this.todayBooks = [];
 				this.todaySeconds = undefined;
+				this.statsError = '';
 				this.statsLoading = true;
 				this.shelfLoading = true;
 				this.quote = undefined;
 				this.render();
-				if (this.mode === 'today') {
-					void this.loadStats();
-					void this.loadTodayBooks();
-				}
+				if (this.mode === 'today') void this.loadTodayBooks();
 			}
+			if (todayVisible && get(settingsStore).wereadApiKey) void this.loadStats();
 			void this.loadJournal();
 		}, 60_000);
 	}
@@ -335,38 +347,54 @@ export class WereadJournalPanel extends WereadPanel {
 	private async loadStats(): Promise<void> {
 		const date = this.date;
 		const generation = this.credentialGeneration;
+		if (this.statsRequest?.date === date && this.statsRequest.generation === generation) return;
+		const request = { date, generation };
+		this.statsRequest = request;
+		const isCurrent = () =>
+			this.active && date === this.date && generation === this.credentialGeneration;
 		this.statsLoading = true;
-		this.todaySeconds = undefined;
-		this.statsError = '';
 		try {
 			const response = await this.api.getReadingStats(
 				'monthly',
 				Math.floor(Date.now() / 1000)
 			);
 			if (!response) throw new Error('今日阅读时长暂不可用');
-			if (!this.active || date !== this.date || generation !== this.credentialGeneration)
-				return;
+			if (!isCurrent()) return;
 			const values = Object.entries(response.readTimes ?? {}).filter(
 				([timestamp]) => dayKey(new Date(Number(timestamp) * 1000)) === date
 			);
 			this.todaySeconds = values.length
 				? values.reduce((sum, [, seconds]) => sum + Math.max(0, Number(seconds) || 0), 0)
-				: undefined;
+				: this.todaySeconds;
+			this.statsError = '';
 		} catch (error) {
-			if (generation === this.credentialGeneration)
+			if (isCurrent() && this.todaySeconds === undefined)
 				this.statsError = error instanceof Error ? error.message : '阅读统计加载失败';
-		}
-		if (this.active && date === this.date && generation === this.credentialGeneration) {
-			this.statsLoading = false;
-			this.render();
+		} finally {
+			if (this.statsRequest === request) this.statsRequest = undefined;
+			if (isCurrent()) {
+				this.statsLoading = false;
+				this.updateContent?.();
+			}
 		}
 	}
 	private renderHeader(): void {
 		if (!this.body) return;
 		const state = this.state;
+		const duration = state.lastDurationMs > 0 && !state.syncing
+			? ` · 上次刷新 ${(state.lastDurationMs / 1000).toFixed(1)} 秒`
+			: '';
 		this.status.setText(
-			`${state.hasCache ? `已缓存 ${state.notes.length} 条笔记` : '首次整理笔记'}${state.syncing ? ` · 正在更新 ${state.scannedBooks}/${state.totalBooks} 本` : ''}${state.updatedAt ? ` · 上次更新 ${new Date(state.updatedAt).toLocaleString('zh-CN')}` : ''}${state.failedBooks ? ` · ${state.failedBooks} 本未完整获取` : ''}${state.error ? ` · ${state.error}` : ''}`
+			`${state.hasCache ? `已缓存 ${state.notes.length} 条笔记` : '首次整理笔记'}${state.syncing ? ` · 正在更新 ${state.scannedBooks}/${state.totalBooks} 本` : ''}${state.updatedAt ? ` · 上次更新 ${new Date(state.updatedAt).toLocaleString('zh-CN')}` : ''}${duration}${state.failedBooks ? ` · ${state.failedBooks} 本未完整获取` : ''}${state.error ? ` · ${state.error}` : ''}`
 		);
+		const failures = state.failures ?? [];
+		this.failureDetails.hidden = state.syncing || !failures.length;
+		if (!this.failureDetails.hidden) {
+			this.failureList.empty();
+			for (const { title, reason } of failures) {
+				this.failureList.createEl('li', { text: `《${formatBookTitle(title, get(settingsStore))}》 · ${reason}` });
+			}
+		}
 		this.status.title = this.status.textContent ?? '';
 		this.status.setAttribute('aria-label', this.status.textContent ?? '');
 		this.headerDate.setText(
@@ -424,7 +452,7 @@ export class WereadJournalPanel extends WereadPanel {
 		const updateMetrics = () => {
 			const notes = this.state.notes.filter((note) => noteDay(note) === this.date);
 			const seconds = this.todaySeconds;
-			const duration = this.statsLoading
+			const duration = this.statsLoading && seconds === undefined
 				? '加载中…'
 				: seconds === undefined
 					? this.statsError || '今日暂无时长记录'
@@ -448,6 +476,15 @@ export class WereadJournalPanel extends WereadPanel {
 				const card = metricCards[index];
 				const strong = card.querySelector('strong')!;
 				if (strong.textContent !== value) strong.setText(value);
+				if (index === 0) {
+					const hint = card.querySelector<HTMLElement>('.weread-journal-metric-hint');
+					if (!this.statsLoading && !this.statsError && !hint && get(settingsStore).wereadApiKey) {
+						card.createEl('small', {
+							cls: 'weread-journal-metric-hint',
+							text: '微信读书统计可能延迟，稍后会自动更新。'
+						});
+					} else if (this.statsError) hint?.remove();
+				}
 				let status = card.querySelector<HTMLElement>('.weread-journal-metric-status');
 				if (index && countStatus) {
 					status ??= card.createEl('small', { cls: 'weread-journal-metric-status' });

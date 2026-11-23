@@ -30,10 +30,10 @@ window.Date = class extends RealDate {
   static now() { return NOW; }
 };
 Math.random = () => 0;
-const intervals = new Set();
+const intervals = new Map();
 const originalSet = window.setInterval.bind(window);
 const originalClear = window.clearInterval.bind(window);
-window.setInterval = (...args) => { const id = originalSet(...args); intervals.add(id); return id; };
+window.setInterval = (...args) => { const id = originalSet(...args); intervals.set(id, args[0]); return id; };
 window.clearInterval = (id) => { intervals.delete(id); originalClear(id); };
 const create = function(tag, options = {}) {
   if (typeof options === 'string') options = { cls: options };
@@ -1068,6 +1068,32 @@ window.smoke = {
     check(cards(results()).length === 100, 'Search initially bounds rendered notes to 100');
     click('再看 5 条'); check(cards(results()).length === 105, 'Show more renders remaining notes');
     journal.publish({ ...state, notes: baseNotes, failedBooks: 0, error: '' });
+    const pollGate = gate();
+    let statsCalls = 0;
+    await mount('today', journal, {
+      getShelf: api.getShelf,
+      async getReadingStats() {
+        statsCalls++;
+        return statsCalls === 1 ? { readTimes: { [NOW / 1000]: 180 } } : pollGate.promise;
+      }
+    });
+    const poll = [...intervals.values()][0];
+    const duration = () => view.contentEl.querySelector('.weread-journal-today-metrics-grid strong').textContent;
+    view.contentEl.hidden = true;
+    poll(); await tick();
+    check(statsCalls === 1, 'A hidden Today panel does not poll reading time');
+    view.contentEl.hidden = false;
+    poll(); poll(); await tick();
+    check(statsCalls === 2 && duration() === '0小时3分钟', 'Visible Today coalesces polls and keeps its last duration while loading');
+    pollGate.resolve(undefined); await tick();
+    check(duration() === '0小时3分钟', 'A failed poll keeps the last successful duration visible');
+    const beforeFailure = state;
+    journal.publish({ ...state, failedBooks: 1, lastDurationMs: 1600, failures: [{ bookId: 'a', title: '山间的阅读', reason: '想法分页未取完' }] });
+    const failures = view.contentEl.querySelector('.weread-journal-failures');
+    check(!failures.hidden && failures.textContent.includes('想法分页未取完'), 'Journal exposes per-book failure details');
+    check(view.contentEl.querySelector('.weread-journal-status').textContent.includes('1.6 秒'), 'Journal reports the latest refresh duration');
+    journal.publish(beforeFailure);
+    check(failures.hidden, 'Recovered journal clears the failure disclosure');
     const oldShelf = gate(); const oldStats = gate();
     let account = 'old';
     const accountApi = {

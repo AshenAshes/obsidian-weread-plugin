@@ -153,6 +153,17 @@
 	overflow-wrap: anywhere;
 }
 
+.weread-journal-view .weread-journal-failures {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	max-height: 14em;
+	overflow: auto;
+}
+
+.weread-journal-failures > summary {
+	cursor: pointer;
+}
+
 .weread-journal-summary {
 	display: grid;
 	grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
@@ -198,7 +209,8 @@
 .weread-journal-today-metrics-grid > div {
 	min-width: 0;
 }
-.weread-journal-metric-status {
+.weread-journal-metric-status,
+.weread-journal-view .weread-journal-metric-hint {
 	display: block;
 	margin-top: 6px;
 	color: var(--text-muted);
