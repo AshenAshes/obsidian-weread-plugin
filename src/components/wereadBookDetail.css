@@ -11,6 +11,16 @@
 .weread-detail-panel *::after {
 	box-sizing: border-box;
 }
+.weread-detail-panel .weread-detail-highlight,
+.weread-detail-panel .weread-detail-popular,
+.weread-detail-panel .weread-detail-note {
+	content-visibility: auto;
+	contain-intrinsic-size: auto 150px;
+}
+.weread-detail-panel .weread-load-more {
+	margin: var(--size-4-4) 0;
+	text-align: center;
+}
 .weread-detail-panel .weread-detail-page {
 	max-width: 940px;
 	margin: 0 auto;

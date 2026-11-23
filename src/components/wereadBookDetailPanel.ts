@@ -29,6 +29,7 @@ import { WereadPanel } from './wereadPanel';
 import { FavoritesUndoToast } from './wereadFavorites';
 import { createQuoteShareButton } from './quoteShareButton';
 import type { QuoteShareContent } from '../quoteShareCard';
+import { renderBatches } from './renderBatches';
 
 const HIGHLIGHT_COLORS: Record<number, { name: string; label: string }> = {
 	1: { name: 'yellow', label: '黄色' },
@@ -45,6 +46,7 @@ const TABS = [
 ] as const;
 type Tab = (typeof TABS)[number][0];
 type PopularResponse = { items: any[]; chapters: any[] };
+const DETAIL_BATCH_SIZE = 50;
 export interface BookDetailPanelOptions {
 	onBack?: () => void;
 	breadcrumbLabel?: string;
@@ -70,6 +72,7 @@ export class WereadBookDetailPanel extends WereadPanel {
 	private usingLocalHighlights = false;
 	private usingLocalPopular = false;
 	private loading = false;
+	private disposeBatch?: () => void;
 	private syncing = false;
 	private failures = new Set<string>();
 	private header!: HTMLElement;
@@ -133,6 +136,8 @@ export class WereadBookDetailPanel extends WereadPanel {
 	async onClose(): Promise<void> {
 		this.active = false;
 		this.generation += 1;
+		this.disposeBatch?.();
+		this.disposeBatch = undefined;
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		this.undo?.clear();
@@ -457,6 +462,8 @@ export class WereadBookDetailPanel extends WereadPanel {
 		return (this.highlightResp?.updated || []).filter((h) => String(h.type) !== '0');
 	}
 	private renderContent(): void {
+		this.disposeBatch?.();
+		this.disposeBatch = undefined;
 		this.stars.clear();
 		this.body.empty();
 		this.body.setAttribute('aria-busy', String(this.loading));
@@ -534,13 +541,24 @@ export class WereadBookDetailPanel extends WereadPanel {
 				(chapterMap.get(a)?.chapterIdx ?? Number.MAX_SAFE_INTEGER) -
 				(chapterMap.get(b)?.chapterIdx ?? Number.MAX_SAFE_INTEGER)
 		);
-		for (const [key, highlights] of ordered) {
-			const chapter = chapterMap.get(key)?.title || highlights[0]?.chapterName || '未分章节';
-			const section = this.body.createEl('section', { cls: 'weread-detail-chapter' });
-			section.createEl('h2', { text: chapter, cls: 'weread-detail-chapter-title' });
-			for (const h of [...highlights].sort(
+		const rows = ordered.flatMap(([key, highlights]) => {
+			const chapterRecord = chapterMap.get(key);
+			const chapter = chapterRecord?.title || highlights[0]?.chapterName || '未分章节';
+			const sorted = highlights.sort(
 				(a, b) => (parseInt(a.range, 10) || 0) - (parseInt(b.range, 10) || 0)
-			)) {
+			);
+			return sorted.map((h) => ({ key, h, chapter, chapterRecord }));
+		});
+		const sections = new Map<string, HTMLElement>();
+		this.disposeBatch = renderBatches(this.body, rows, DETAIL_BATCH_SIZE, '条', (batch) => {
+			const stars: [HTMLButtonElement, JournalNote][] = [];
+			for (const { key, h, chapter, chapterRecord } of batch) {
+				let section = sections.get(key);
+				if (!section) {
+					section = this.body.createEl('section', { cls: 'weread-detail-chapter' });
+					section.createEl('h2', { text: chapter, cls: 'weread-detail-chapter-title' });
+					sections.set(key, section);
+				}
 				const card = section.createEl('article', {
 					cls: personal ? 'weread-detail-highlight' : 'weread-detail-popular'
 				});
@@ -571,9 +589,13 @@ export class WereadBookDetailPanel extends WereadPanel {
 				const actions = meta.createDiv({ cls: 'weread-detail-entry-actions' });
 				this.sourceAndCopy(actions, h.chapterUid, h.range, chapter, h.markText || '', personal ? this.bookId : this.communitySource?.bookId ?? this.bookId);
 				this.shareButton(actions, h.markText || '', chapter, h.createTime, !personal);
-				if (personal) this.favoriteButton(actions, h);
+				if (personal) {
+					const star = this.favoriteButton(actions, h, chapterRecord);
+					if (star) stars.push(star);
+				}
 			}
-		}
+			if (stars.length) this.updateStarButtons(stars);
+		});
 	}
 	private renderNotes(): void {
 		const entries = [...(this.reviewResp?.reviews || [])]
@@ -583,31 +605,32 @@ export class WereadBookDetailPanel extends WereadPanel {
 			this.status('还没有笔记，留一点自己的思考。');
 			return;
 		}
-		for (const wrapper of entries) {
-			const r = wrapper.review;
-			const card = this.body.createEl('article', { cls: 'weread-detail-note' });
-			if (r?.abstract)
-				card.createEl('blockquote', { text: r.abstract, cls: 'weread-detail-quote' });
-			card.createEl('p', { text: r?.content || '', cls: 'weread-detail-note-text' });
-			const meta = card.createDiv({ cls: 'weread-detail-entry-meta' });
-			const chapter =
-				r?.chapterName ||
-				this.highlightResp?.chapters?.find((ch) => ch.chapterUid === r?.chapterUid)
-					?.title ||
-				'';
-			if (chapter) meta.createSpan({ text: chapter });
-			if (r?.createTime)
-				meta.createSpan({ text: formatNoteTimestamp(Number(r.createTime) * 1000) });
-			const actions = meta.createDiv({ cls: 'weread-detail-entry-actions' });
-			this.sourceAndCopy(actions, r?.chapterUid, r?.range, chapter, r?.content || '');
-			this.shareButton(
-				actions,
-				[r?.abstract, r?.content].filter(Boolean).join('\n\n'),
-				chapter,
-				r?.createTime
-			);
-			if (this.localFilePath) this.button(actions, '本地笔记', () => void this.openLocal());
-		}
+		const chapterTitles = new Map(
+			this.highlightResp?.chapters?.map((chapter) => [chapter.chapterUid, chapter.title])
+		);
+		this.disposeBatch = renderBatches(this.body, entries, DETAIL_BATCH_SIZE, '条', (batch) => {
+			for (const wrapper of batch) {
+				const r = wrapper.review;
+				const card = this.body.createEl('article', { cls: 'weread-detail-note' });
+				if (r?.abstract)
+					card.createEl('blockquote', { text: r.abstract, cls: 'weread-detail-quote' });
+				card.createEl('p', { text: r?.content || '', cls: 'weread-detail-note-text' });
+				const meta = card.createDiv({ cls: 'weread-detail-entry-meta' });
+				const chapter = r?.chapterName || chapterTitles.get(r?.chapterUid) || '';
+				if (chapter) meta.createSpan({ text: chapter });
+				if (r?.createTime)
+					meta.createSpan({ text: formatNoteTimestamp(Number(r.createTime) * 1000) });
+				const actions = meta.createDiv({ cls: 'weread-detail-entry-actions' });
+				this.sourceAndCopy(actions, r?.chapterUid, r?.range, chapter, r?.content || '');
+				this.shareButton(
+					actions,
+					[r?.abstract, r?.content].filter(Boolean).join('\n\n'),
+					chapter,
+					r?.createTime
+				);
+				if (this.localFilePath) this.button(actions, '本地笔记', () => void this.openLocal());
+			}
+		});
 	}
 	private renderReviews(): void {
 		const mine = (this.reviewResp?.reviews || []).filter((row) => row.review?.type === 4);
@@ -782,7 +805,11 @@ export class WereadBookDetailPanel extends WereadPanel {
 			}
 		});
 	}
-	private favoriteButton(parent: HTMLElement, highlight: unknown): void {
+	private favoriteButton(
+		parent: HTMLElement,
+		highlight: unknown,
+		chapter: unknown
+	): [HTMLButtonElement, JournalNote] | undefined {
 		const note = bookDetailFavoriteNote(
 			{
 				bookId: this.bookId,
@@ -791,7 +818,7 @@ export class WereadBookDetailPanel extends WereadPanel {
 				cover: this.detail?.cover || this.highlightResp?.book?.cover || this.bookCover
 			},
 			highlight,
-			this.highlightResp?.chapters || [],
+			chapter ? [chapter] : [],
 			this.usingLocalHighlights
 		);
 		const button = this.button(
@@ -814,6 +841,7 @@ export class WereadBookDetailPanel extends WereadPanel {
 		}
 		button.dataset.favoriteId = note.id;
 		this.stars.set(button, note);
+		return [button, note];
 	}
 	private updateStars(): void {
 		if (!this.active || !this.favoriteStatus) return;
@@ -837,9 +865,16 @@ export class WereadBookDetailPanel extends WereadPanel {
 				});
 			});
 		}
-		for (const [button, note] of this.stars) {
-			const saved = state?.favorites.some((entry) => entry.id === note.id) || false;
-			const pending = this.pending.has(note.id) || !!state?.pendingIds.includes(note.id);
+		this.updateStarButtons(this.stars);
+	}
+
+	private updateStarButtons(stars: Iterable<[HTMLButtonElement, JournalNote]>): void {
+		const state = this.favoriteState;
+		const savedIds = new Set(state?.favorites.map((entry) => entry.id));
+		const pendingIds = new Set(state?.pendingIds);
+		for (const [button, note] of stars) {
+			const saved = savedIds.has(note.id);
+			const pending = this.pending.has(note.id) || pendingIds.has(note.id);
 			const label = saved ? '取消收藏' : '收藏';
 			button.setAttribute('aria-pressed', String(saved));
 			button.setAttribute('aria-label', label);

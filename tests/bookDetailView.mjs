@@ -93,6 +93,21 @@ const click=(label,el=root)=>{const b=button(label,el);check(b&&!b.disabled,'Act
 const settled=async(f=activeFixture)=>{await until(()=>f.service.getSnapshot().pendingIds.length===0,'favorite write');await tick();};
 const tab=name=>{const b=root.querySelector('[data-tab="'+name+'"]');b.click();check(b.getAttribute('aria-selected')==='true','Tab selected: '+name);};
 window.smoke={assertions,
+ async batching(){
+  const highlights=Array.from({length:55},(_,i)=>highlight('batch-'+i,{chapterUid:i<52?1:2,range:String(100+i)+'-'+String(120+i)}));
+  const thoughts=Array.from({length:53},(_,i)=>({review:{type:1,reviewId:'batch-thought-'+i,chapterUid:1,content:'Thought '+i,createTime:CREATED-i}}));
+  await mount(router((index,_id,response)=> index===2 ? {...response,updated:highlights} : index===3 ? {reviews:thoughts} : response));
+  window.scrollTo(0,0);
+  check(root.querySelectorAll('.weread-detail-highlight').length===50,'Long detail initially renders 50 highlights');
+  click('加载更多（剩余 5 条）');
+  check(root.querySelectorAll('.weread-detail-highlight').length===55&&root.querySelectorAll('.weread-detail-chapter-title').length===2,'Chapter heading is reused across batches');
+  const appended=root.querySelector('[data-bookmark-id="batch-54"]');
+  check(button('收藏',appended)&&!button('收藏',appended).disabled,'A highlight added later has an enabled favorite action');
+  tab('notes');
+  check(root.querySelectorAll('.weread-detail-note').length===50,'Long notes list starts with 50 entries');
+  click('加载更多（剩余 3 条）');
+  check(root.querySelectorAll('.weread-detail-note').length===53&&!root.querySelector('.weread-load-more'),'Last batch clears the load-more control');
+ },
  async content(){
   const f=await mount();
   check(root.querySelector('h1.weread-detail-title').textContent==='山间的阅读','Remote hero metadata replaces shelf placeholder');
@@ -330,6 +345,7 @@ test(
 			'remoteFallbackPriority',
 			'foreignFallback',
 			'failures',
+			'batching',
 			'races'
 		]) {
 			await browser.evaluate(`smoke.${scenario}()`);

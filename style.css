@@ -1413,6 +1413,8 @@
 }
 
 .weread-bookshelf-card {
+	content-visibility: auto;
+	contain-intrinsic-size: auto 140px;
 	display: flex;
 	gap: 12px;
 	padding: 14px;
@@ -1420,6 +1422,12 @@
 	border-radius: 12px;
 	background: var(--background-secondary);
 	position: relative;
+}
+
+.weread-bookshelf-grid .weread-load-more {
+	grid-column: 1 / -1;
+	margin: var(--size-4-4) 0;
+	text-align: center;
 }
 
 .weread-bookshelf-card.is-clickable {

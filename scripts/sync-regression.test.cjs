@@ -585,6 +585,50 @@ test('shelf genre filters the existing book list without changing type or sync s
 });
 
 
+test('bookshelf loads more across year groups and discards callbacks from the previous filter', async () => {
+	const h = harness();
+	const { WereadBookshelfPanel } = h.load('src/components/wereadBookshelf.ts');
+	const view = Object.create(WereadBookshelfPanel.prototype);
+	const observers = [];
+	const ownerDocument = { defaultView: { IntersectionObserver: class {
+		constructor(callback) { this.callback = callback; observers.push(this); }
+		observe() {}
+		disconnect() { this.disconnected = true; }
+	} } };
+	function element(parent, text) {
+		return {
+			ownerDocument, text, children: [],
+			get lastElementChild() { return this.children.at(-1); },
+			appendChild(child) { child.remove(); this.children.push(child); },
+			createDiv() { const child = element(this); this.children.push(child); return child; },
+			createEl(_tag, options) { const child = element(this, options.text); this.children.push(child); return child; },
+			remove() { if (parent) parent.children = parent.children.filter((child) => child !== this); },
+			empty() { this.children = []; },
+			setText(value) { this.text = value; }
+		};
+	}
+	const books = Array.from({ length: 130 }, (_, id) => ({ bookId: String(id), year: id < 65 ? '2026' : '2025' }));
+	const rendered = [];
+	let filtered = books;
+	Object.assign(view, {
+		gridEl: element(), emptyStateEl: element(), viewMode: 'list',
+		updateGenreFilter() {}, renderSummaryCard() {}, shouldGroupByYear: () => true,
+		getFilteredBooks: () => filtered, getReadYear: (book) => book.year,
+		renderBookCard(book) { rendered.push(book.bookId); }
+	});
+	view.renderBooks();
+	assert.equal(rendered.length, 60);
+	view.gridEl.lastElementChild.lastElementChild.onclick();
+	assert.equal(rendered.length, 120);
+	assert.deepEqual(view.gridEl.children.slice(0, 2).map((group) => group.children[0].text), ['2026 年', '2025 年']);
+	filtered = books.slice(129);
+	view.renderBooks();
+	assert.equal(observers[0].disconnected, true);
+	observers[0].callback([{ isIntersecting: true }]);
+	assert.equal(rendered.length, 121);
+	assert.equal(rendered.at(-1), '129');
+});
+
 test('shelf sync persists checkpoints, selectively fetches changed books, retries failures and honors force', async () => {
  const h = harness();
  const Sync = h.load('src/syncNotebooks.ts').default;

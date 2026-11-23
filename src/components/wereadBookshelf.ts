@@ -19,6 +19,7 @@ import { SyncLogModal } from './syncLogModal';
 import { settingsStore } from '../settings';
 import { get } from 'svelte/store';
 import { formatBookTitle } from '../utils/sanitizeTitle';
+import { renderBatches } from './renderBatches';
 
 // 计算相对时间（中文显示）
 function getRelativeTimeInChinese(timestamp: number): string {
@@ -50,6 +51,7 @@ type ReadingStatusFilter = 'all' | 'reading' | 'finished';
 type BookshelfSort = 'recent' | 'title';
 type BookshelfViewMode = 'list' | 'cover';
 const UNKNOWN_YEAR_LABEL = '未知年份';
+const BOOKSHELF_BATCH_SIZE = 60;
 
 class ConfirmDeleteModal extends Modal {
 	constructor(app: App, private titleText: string, private onConfirm: () => Promise<void>) {
@@ -76,6 +78,7 @@ class ConfirmDeleteModal extends Modal {
 
 export class WereadBookshelfPanel extends WereadPanel {
 	private loadGeneration = 0;
+	private disposeBatch?: () => void;
 	private localSnapshot = false;
 	private refreshStatusEl: HTMLElement;
 	private shelfBooks: BookshelfBook[] = [];
@@ -425,6 +428,8 @@ export class WereadBookshelfPanel extends WereadPanel {
 
 	async onClose() {
 		this.loadGeneration++;
+		this.disposeBatch?.();
+		this.disposeBatch = undefined;
 		if (this.settingsUnsubscribe) {
 			this.settingsUnsubscribe();
 		}
@@ -512,6 +517,8 @@ export class WereadBookshelfPanel extends WereadPanel {
 	}
 
 	private renderBooks(): void {
+		this.disposeBatch?.();
+		this.disposeBatch = undefined;
 		this.updateGenreFilter();
 		const filteredBooks = this.getFilteredBooks();
 		this.gridEl.empty();
@@ -527,31 +534,39 @@ export class WereadBookshelfPanel extends WereadPanel {
 
 		if (this.viewMode === 'cover') {
 			const coverGrid = this.gridEl.createDiv({ cls: 'weread-bookshelf-cover-grid' });
-			for (const book of filteredBooks) {
-				this.renderCoverCard(book, coverGrid);
-			}
+			this.disposeBatch = renderBatches(this.gridEl, filteredBooks, BOOKSHELF_BATCH_SIZE, '本', (batch) => {
+				for (const book of batch) this.renderCoverCard(book, coverGrid);
+			});
 			return;
 		}
 
 		if (this.shouldGroupByYear()) {
-			for (const group of this.groupBooksByYear(filteredBooks)) {
-				const section = this.gridEl.createDiv({ cls: 'weread-bookshelf-group' });
-				section.createEl('h3', {
-					cls: 'weread-bookshelf-group-title',
-					text: group.year === UNKNOWN_YEAR_LABEL ? group.year : `${group.year} 年`
-				});
-				const groupGrid = section.createDiv({ cls: 'weread-bookshelf-group-grid' });
-				for (const book of group.books) {
+			const rows = this.groupBooksByYear(filteredBooks).flatMap(({ year, books }) =>
+				books.map((book) => ({ year, book }))
+			);
+			const groups = new Map<string, HTMLElement>();
+			this.disposeBatch = renderBatches(this.gridEl, rows, BOOKSHELF_BATCH_SIZE, '本', (batch) => {
+				for (const { year, book } of batch) {
+					let groupGrid = groups.get(year);
+					if (!groupGrid) {
+						const section = this.gridEl.createDiv({ cls: 'weread-bookshelf-group' });
+						section.createEl('h3', {
+							cls: 'weread-bookshelf-group-title',
+							text: year === UNKNOWN_YEAR_LABEL ? year : `${year} 年`
+						});
+						groupGrid = section.createDiv({ cls: 'weread-bookshelf-group-grid' });
+						groups.set(year, groupGrid);
+					}
 					this.renderBookCard(book, groupGrid);
 				}
-			}
+			});
 			return;
 		}
 
 		const defaultGrid = this.gridEl.createDiv({ cls: 'weread-bookshelf-group-grid' });
-		for (const book of filteredBooks) {
-			this.renderBookCard(book, defaultGrid);
-		}
+		this.disposeBatch = renderBatches(this.gridEl, filteredBooks, BOOKSHELF_BATCH_SIZE, '本', (batch) => {
+			for (const book of batch) this.renderBookCard(book, defaultGrid);
+		});
 	}
 
 	private renderSummaryCard(filteredBooks: BookshelfBook[], settings: any): void {
@@ -639,9 +654,10 @@ export class WereadBookshelfPanel extends WereadPanel {
 			const cover = card.createEl('img', {
 				cls: 'weread-bookshelf-cover-card-img'
 			});
+			cover.loading = 'lazy';
+			cover.decoding = 'async';
 			cover.src = book.cover;
 			cover.alt = displayTitle;
-			cover.loading = 'lazy';
 		} else {
 			card.createDiv({
 				cls: 'weread-bookshelf-card-cover-placeholder',
@@ -690,6 +706,8 @@ export class WereadBookshelfPanel extends WereadPanel {
 			const cover = coverWrap.createEl('img', {
 				cls: 'weread-bookshelf-card-cover'
 			});
+			cover.loading = 'lazy';
+			cover.decoding = 'async';
 			cover.src = book.cover;
 			cover.alt = displayTitle;
 		} else {
