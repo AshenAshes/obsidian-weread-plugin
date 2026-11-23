@@ -6,6 +6,7 @@ import test from 'node:test';
 import { transformSync } from 'esbuild';
 
 const READER_URL = 'https://weread.qq.com/web/reader/synthetic-book?k=synthetic-chapter-5';
+const SHELF_URL = 'https://weread.qq.com/web/shelf';
 const bookmark = (rangeStart, markText) => ({
   bookId: '42', chapterUid: 5, rangeStart, rangeEnd: rangeStart + 74, markText
 });
@@ -108,6 +109,32 @@ function fixture(t) {
   };
   return { view, webview, timers, notices, requests, guestScripts, guest, runUntilRequests, openAt };
 }
+
+test('restoring the shelf and a bookmark during WebView bootstrap defers guest calls', async t => {
+	const f = fixture(t);
+	await f.view.setState({ url: SHELF_URL });
+	await f.view.onOpen();
+	const getURL = f.webview.getURL.bind(f.webview);
+	const execute = f.webview.executeJavaScript.bind(f.webview);
+	let prematureCalls = 0;
+	const beforeReady = () => {
+		prematureCalls++;
+		throw new Error('Guest is not attached');
+	};
+	f.webview.getURL = beforeReady;
+	f.webview.executeJavaScript = beforeReady;
+	await f.view.setState({ url: SHELF_URL });
+	const target = bookmark(100, 'Restored quote');
+	f.view.navigate(READER_URL, target);
+	assert.equal(prematureCalls, 0);
+
+	f.webview.getURL = getURL;
+	f.webview.executeJavaScript = execute;
+	f.webview.finish();
+	f.webview.finish();
+	await f.runUntilRequests(1);
+	assert.deepEqual(f.requests[0].bookmark, target);
+});
 
 test('same loaded chapter schedules a second bookmark without another did-finish-load', async t => {
   const f = fixture(t), first = bookmark(100, 'First synthetic quote'), second = bookmark(1089, 'Second synthetic quote');

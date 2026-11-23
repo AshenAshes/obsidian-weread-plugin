@@ -34,6 +34,7 @@ export class WereadReadingView extends ItemView {
 	private pendingUrl: string | null = null;
 	private pendingBookmark: WereadBookmarkLocation | null = null;
 	private isBootstrapped = false;
+	private isWebviewReady = false;
 	private bookmarkNavigationTimer: number | null = null;
 	private bookmarkNavigationGeneration = 0;
 
@@ -48,38 +49,43 @@ export class WereadReadingView extends ItemView {
 	async onClose() {
 		this.cancelBookmarkNavigation();
 		this.pendingBookmark = null;
+		this.isWebviewReady = false;
+		this.webviewEl = undefined;
 	}
 
 	async onOpen() {
-		this.webviewEl = this.contentEl.doc.createElement('webview') as WebviewElement;
-		this.webviewEl.setAttribute('partition', WEREAD_PARTITION);
-		this.webviewEl.setAttribute('allowpopups', '');
-		this.webviewEl.addClass('weread-frame');
+		const webview = this.contentEl.doc.createElement('webview') as WebviewElement;
+		this.webviewEl = webview;
+		this.isBootstrapped = false;
+		this.isWebviewReady = false;
+		webview.setAttribute('partition', WEREAD_PARTITION);
+		webview.setAttribute('allowpopups', '');
+		webview.addClass('weread-frame');
 		// A hook in the previous document is discarded during navigation. Install in
 		// the new document before the asynchronous reader paints its first page.
-		this.webviewEl.addEventListener('dom-ready', () => {
+		webview.addEventListener('dom-ready', () => {
+			if (this.webviewEl !== webview) return;
+			this.isWebviewReady = true;
 			if (this.pendingBookmark) void this.installEarlyCanvasHooks();
 		});
-		this.webviewEl.addEventListener('did-finish-load', () => {
+		webview.addEventListener('did-finish-load', () => {
+			if (this.webviewEl !== webview) return;
+			this.isWebviewReady = true;
 			if (!this.isBootstrapped) {
 				this.isBootstrapped = true;
 				if (this.pendingUrl) {
 					const nextUrl = this.pendingUrl;
 					this.pendingUrl = null;
-					this.webviewEl.setAttribute('src', nextUrl);
+					webview.setAttribute('src', nextUrl);
 					return;
 				}
 			}
 			void this.installEarlyCanvasHooks().then(() => this.scheduleBookmarkNavigation());
 		});
 
-		if (this.currentUrl === WEREAD_HOME_URL) {
-			this.webviewEl.setAttribute('src', WEREAD_HOME_URL);
-		} else {
-			this.pendingUrl = this.currentUrl;
-			this.webviewEl.setAttribute('src', WEREAD_HOME_URL);
-		}
-		this.contentEl.appendChild(this.webviewEl);
+		this.pendingUrl = this.currentUrl === WEREAD_HOME_URL ? null : this.currentUrl;
+		webview.setAttribute('src', WEREAD_HOME_URL);
+		this.contentEl.appendChild(webview);
 		this.contentEl.addClass('weread-view-content');
 	}
 
@@ -108,11 +114,10 @@ export class WereadReadingView extends ItemView {
 		if (!this.webviewEl) return;
 		if (!this.isBootstrapped && this.currentUrl !== WEREAD_HOME_URL) {
 			this.pendingUrl = this.currentUrl;
-			this.webviewEl.setAttribute('src', WEREAD_HOME_URL);
 			return;
 		}
 		this.pendingUrl = null;
-		const loadedUrl = this.webviewEl.getURL?.() ?? this.webviewEl.getAttribute('src');
+		const loadedUrl = this.getLoadedUrl() ?? this.webviewEl.getAttribute('src');
 		if (loadedUrl === this.currentUrl) {
 			// Selecting another highlight in this chapter does not cause a load event.
 			if (this.pendingBookmark) {
@@ -123,6 +128,21 @@ export class WereadReadingView extends ItemView {
 		this.webviewEl.setAttribute('src', this.currentUrl);
 	}
 
+	private getLoadedUrl(): string | undefined {
+		if (!this.isWebviewReady || !this.webviewEl) return;
+		try {
+			return this.webviewEl.getURL?.() ?? this.webviewEl.getAttribute('src');
+		} catch {
+			// Electron can throw while attaching or tearing down its guest.
+			return undefined;
+		}
+	}
+
+	private async runInWebview(code: string): Promise<unknown> {
+		if (!this.isWebviewReady) return;
+		return this.webviewEl?.executeJavaScript?.(code);
+	}
+
 	private cancelBookmarkNavigation(): void {
 		this.bookmarkNavigationGeneration++;
 		if (this.bookmarkNavigationTimer !== null) {
@@ -130,15 +150,14 @@ export class WereadReadingView extends ItemView {
 			this.bookmarkNavigationTimer = null;
 		}
 		// Stop a pending page scan before a newer highlight or another book opens.
-		void this.webviewEl
-			?.executeJavaScript?.('window.__wereadBookmarkNavigationToken = null;')
+		void this.runInWebview('window.__wereadBookmarkNavigationToken = null;')
 			.catch((): void => undefined);
 	}
 
 	private async installEarlyCanvasHooks(): Promise<void> {
-		if (!this.pendingBookmark || !this.webviewEl?.executeJavaScript) return;
+		if (!this.pendingBookmark) return;
 		try {
-			await this.webviewEl.executeJavaScript(BOOKMARK_CANVAS_HOOK_SCRIPT);
+			await this.runInWebview(BOOKMARK_CANVAS_HOOK_SCRIPT);
 		} catch (error) {
 			console.debug('[weread plugin] early canvas hook failed', error);
 		}
@@ -146,11 +165,11 @@ export class WereadReadingView extends ItemView {
 
 	private scheduleBookmarkNavigation(retry = 0): void {
 		const bookmark = this.pendingBookmark;
-		if (!bookmark || !this.webviewEl) return;
+		if (!bookmark || !this.isWebviewReady) return;
 		const generation = this.bookmarkNavigationGeneration;
 		if (this.bookmarkNavigationTimer !== null)
 			window.clearTimeout(this.bookmarkNavigationTimer);
-		const currentUrl = this.webviewEl.getURL?.() ?? this.webviewEl.getAttribute('src') ?? '';
+		const currentUrl = this.getLoadedUrl() ?? '';
 		const expected = this.currentUrl.split(/[?#]/)[0];
 		if (!currentUrl.includes('/web/reader/') || currentUrl.split(/[?#]/)[0] !== expected) {
 			if (retry < 12) {
@@ -176,11 +195,11 @@ export class WereadReadingView extends ItemView {
 		bookmark: WereadBookmarkLocation,
 		generation = this.bookmarkNavigationGeneration
 	): Promise<void> {
-		if (!this.webviewEl?.executeJavaScript) return;
+		if (!this.isWebviewReady) return;
 		try {
 			await this.installEarlyCanvasHooks();
 			if (generation !== this.bookmarkNavigationGeneration) return;
-			const result = await this.webviewEl.executeJavaScript(
+			const result = await this.runInWebview(
 				buildBookmarkNavigationScript(bookmark)
 			);
 			if (
@@ -190,7 +209,7 @@ export class WereadReadingView extends ItemView {
 				return;
 			const mode =
 				result && typeof result === 'object' && 'mode' in result ? result.mode : undefined;
-			if (mode === 'cancelled') return;
+			if (!mode || mode === 'cancelled') return;
 			console.debug('[weread plugin] bookmark navigation result', { mode });
 			this.pendingBookmark = null;
 			if (
